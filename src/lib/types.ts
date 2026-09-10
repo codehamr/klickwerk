@@ -1,6 +1,5 @@
 export interface Settings {
   version: number;
-  provider: "local" | "custom";
   base_url: string;
   model: string;
   api_key: string;
@@ -20,9 +19,56 @@ export type Phase =
   | "stopped"
   | "done"
   | "error";
+export type Action =
+  | { type: "click"; x: number; y: number; button: "left" | "right" }
+  | { type: "double_click" | "move"; x: number; y: number }
+  | {
+      type: "drag";
+      x: number;
+      y: number;
+      x2: number;
+      y2: number;
+      duration_ms: number;
+    }
+  | { type: "scroll"; x: number; y: number; amount: number }
+  | { type: "text"; text: string }
+  | { type: "key"; key: string; modifiers: string[] }
+  | { type: "wait"; duration_ms: number }
+  | { type: "observe" }
+  | { type: "ask_user"; question: string }
+  | { type: "finish"; summary: string };
 export interface Step {
   id: number;
+  actor: "agent" | "user" | "system";
   description: string;
+  action: Action | null;
+  status:
+    "pending" | "completed" | "interrupted" | "failed" | "skipped" | "recorded";
+  elapsed_ms: number;
+  image_size: [number, number] | null;
+  desktop_points: [number, number][];
+}
+export interface Learning {
+  name: string;
+  prompt: string;
+  memory: string;
+}
+export interface Workflow extends Learning {
+  id: string;
+  task: string;
+  steps: Step[];
+  updated_at: number;
+}
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  prompt: string;
+  corrections: number;
+  updated_at: number;
+}
+export interface WorkflowDraft {
+  token: string;
+  workflow: Workflow;
 }
 export interface Run {
   id: number;
@@ -33,6 +79,8 @@ export interface Run {
   result: string;
   question: string;
   elapsed_ms: number;
+  interrupted: boolean;
+  workflow_id: string | null;
 }
 export interface Snapshot {
   settings: Settings;
@@ -41,15 +89,12 @@ export interface Snapshot {
   config_error: string | null;
   run: Run;
   platform: "windows" | "preview";
+  workflows: WorkflowSummary[];
+  workflow_error: string | null;
 }
 export interface Models {
   models: string[];
   partial: boolean;
-}
-export interface Discovery {
-  name: string;
-  base_url: string;
-  models: string[];
 }
 export interface SpeechUpdate {
   text: string;
@@ -67,10 +112,11 @@ export const emptyRun: Run = {
   result: "",
   question: "",
   elapsed_ms: 0,
+  interrupted: false,
+  workflow_id: null,
 };
 export const defaultSettings: Settings = {
   version: 1,
-  provider: "local",
   base_url: "http://localhost:11434/v1",
   model: "",
   api_key: "",

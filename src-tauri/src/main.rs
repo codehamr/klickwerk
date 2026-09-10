@@ -3,6 +3,12 @@
 fn main() {
     #[cfg(windows)]
     {
+        // Capture workers and the input process must use the same physical pixel space.
+        unsafe {
+            windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+                windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            );
+        }
         if klickwerk_core::platform::broker::run_if_requested() {
             return;
         }

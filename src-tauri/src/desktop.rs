@@ -4,6 +4,7 @@ use crate::{
     guard::{Command, Reply},
     platform::{self, capture, input::HeldInput},
     provider::{self, ModelList, Provider},
+    workflow::{self, Learning, Session, Step, Workflow, WorkflowStore, WorkflowSummary},
 };
 use serde::Serialize;
 use std::os::windows::process::CommandExt;
@@ -27,11 +28,6 @@ use windows_sys::Win32::{Foundation::*, Security::Cryptography::*, System::Threa
 #[path = "desktop_tests.rs"]
 pub mod safety_tests;
 
-#[derive(Clone, Serialize, Default)]
-pub struct Step {
-    id: u32,
-    description: String,
-}
 #[derive(Clone, Serialize)]
 pub struct RunView {
     id: u64,
@@ -42,6 +38,8 @@ pub struct RunView {
     result: String,
     question: String,
     elapsed_ms: u64,
+    interrupted: bool,
+    workflow_id: Option<String>,
 }
 impl Default for RunView {
     fn default() -> Self {
@@ -54,6 +52,8 @@ impl Default for RunView {
             result: String::new(),
             question: String::new(),
             elapsed_ms: 0,
+            interrupted: false,
+            workflow_id: None,
         }
     }
 }
@@ -65,6 +65,8 @@ pub struct Snapshot {
     config_error: Option<String>,
     run: RunView,
     platform: &'static str,
+    workflows: Vec<WorkflowSummary>,
+    workflow_error: Option<String>,
 }
 
 pub struct AppState {
@@ -75,18 +77,38 @@ pub struct AppState {
     next_id: AtomicU64,
     requests: Mutex<HashMap<String, oneshot::Sender<()>>>,
     speech: Mutex<Option<Arc<AtomicBool>>>,
-    continuation: Mutex<String>,
+    session: Mutex<Session>,
+    workflows: Mutex<WorkflowStore>,
+    drafts: Mutex<HashMap<String, PreparedWorkflow>>,
 }
 impl AppState {
     fn snapshot(&self) -> Snapshot {
-        let config = self.config.lock().unwrap();
+        let (settings, has_api_key, config_path, config_error) = {
+            let config = self.config.lock().unwrap();
+            (
+                config.settings.public(),
+                !config.settings.api_key.is_empty(),
+                config.path.to_string_lossy().into(),
+                config.error.clone(),
+            )
+        };
+        let run = self.view.lock().unwrap().clone();
+        let (workflows, workflow_error) = {
+            let store = self.workflows.lock().unwrap();
+            (
+                store.workflows.iter().map(Workflow::summary).collect(),
+                store.error.clone(),
+            )
+        };
         Snapshot {
-            settings: config.settings.public(),
-            has_api_key: !config.settings.api_key.is_empty(),
-            config_path: config.path.to_string_lossy().into(),
-            config_error: config.error.clone(),
-            run: self.view.lock().unwrap().clone(),
+            settings,
+            has_api_key,
+            config_path,
+            config_error,
+            run,
             platform: "windows",
+            workflows,
+            workflow_error,
         }
     }
     fn draft(&self, mut settings: Settings, key: Option<String>) -> Result<Settings, String> {
@@ -190,10 +212,6 @@ async fn test_connection(
     network(app, request_id, provider.check()).await
 }
 #[tauri::command]
-async fn discover_servers() -> Vec<provider::Discovery> {
-    provider::discover().await
-}
-#[tauri::command]
 fn stop_task(state: tauri::State<AppState>) {
     if let Some(cancel) = state.active.lock().unwrap().as_ref() {
         cancel.store(true, Ordering::SeqCst);
@@ -201,19 +219,12 @@ fn stop_task(state: tauri::State<AppState>) {
 }
 
 #[tauri::command]
-fn start_task(app: tauri::AppHandle, task: String, reply: Option<String>) -> Result<(), String> {
-    start(app, task, reply, false)
-}
-#[tauri::command]
-fn start_stop_test(app: tauri::AppHandle) -> Result<(), String> {
-    start(app, "Try the emergency stop".into(), None, true)
-}
-
-fn start(
+fn start_task(
     app: tauri::AppHandle,
     task: String,
     reply: Option<String>,
-    simulate: bool,
+    resume_run_id: Option<u64>,
+    workflow_id: Option<String>,
 ) -> Result<(), String> {
     if task.trim().is_empty() || task.len() > 32768 {
         return Err("Enter a task of at most 8,192 characters.".into());
@@ -228,49 +239,225 @@ fn start(
     }
     let settings = {
         let store = state.config.lock().unwrap();
-        if !simulate {
-            if let Some(error) = &store.error {
-                return Err(error.clone());
-            }
-            store.settings.ready()?;
+        if let Some(error) = &store.error {
+            return Err(error.clone());
         }
+        store.settings.ready()?;
         store.settings.clone()
     };
-    let mut history = String::new();
-    if let Some(answer) = reply {
-        let previous = state.view.lock().unwrap();
-        if previous.phase != "waiting"
-            || previous.task != task
-            || answer.trim().is_empty()
-            || answer.len() > 16384
+    let mut view = state.view.lock().unwrap();
+    if let Some(id) = resume_run_id {
+        if view.id != id
+            || view.task != task
+            || !["stopped", "waiting", "error"].contains(&view.phase.as_str())
         {
             return Err(
-                "This answer no longer belongs to the current task. Start a new task.".into(),
+                "This correction no longer belongs to the current task. Start a new task.".into(),
             );
         }
-        history = format!(
-            "{}\nAssistant question: {}\nUser answer: {}",
-            state.continuation.lock().unwrap().as_str(),
-            previous.question,
-            answer
-        );
+        let answer = reply
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("Describe what to change before continuing.")?;
+        let elapsed = view.elapsed_ms;
+        workflow::add_correction(&mut view.steps, &answer, elapsed)?;
+    } else {
+        if reply.is_some() {
+            return Err("A correction must refer to its original task.".into());
+        }
+        let mut session = Session::default();
+        if let Some(id) = &workflow_id {
+            let saved = state.workflows.lock().unwrap().get(id)?;
+            session.memory = saved.learning.memory;
+            session.prior_steps = saved.steps;
+        }
+        *state.session.lock().unwrap() = session;
+        *view = RunView {
+            id: state.next_id.fetch_add(1, Ordering::SeqCst) + 1,
+            task: task.clone(),
+            workflow_id,
+            ..RunView::default()
+        };
     }
-    let id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+    view.phase = "checking".into();
+    view.interrupted = false;
+    view.question.clear();
+    view.result.clear();
+    view.message = "Getting ready to help…".into();
     let cancel = Arc::new(AtomicBool::new(false));
     *active = Some(cancel.clone());
     state.ui_at.store(platform::now(), Ordering::SeqCst);
-    *state.view.lock().unwrap() = RunView {
-        id,
-        phase: "checking".into(),
-        task: task.clone(),
-        message: "Preparing your emergency stop…".into(),
-        ..RunView::default()
-    };
+    drop(view);
     drop(active);
     emit(&app);
     tauri::async_runtime::spawn(async move {
-        controller(app, settings, task, history, cancel, simulate).await;
+        controller(app, settings, task, cancel).await;
     });
+    Ok(())
+}
+
+#[tauri::command]
+fn get_workflow(id: String, state: tauri::State<AppState>) -> Result<Workflow, String> {
+    state.workflows.lock().unwrap().get(&id)
+}
+
+#[derive(Serialize)]
+struct WorkflowDraft {
+    token: String,
+    workflow: Workflow,
+}
+
+#[derive(Clone)]
+struct PreparedWorkflow {
+    run_id: u64,
+    source_steps: usize,
+    correction: Option<String>,
+    workflow: Workflow,
+}
+
+#[tauri::command]
+async fn prepare_workflow(
+    app: tauri::AppHandle,
+    run_id: u64,
+    correction: Option<String>,
+    request_id: String,
+) -> Result<WorkflowDraft, String> {
+    let (view, session, settings) = {
+        let state = app.state::<AppState>();
+        let active = state.active.lock().unwrap();
+        if active.is_some() {
+            return Err("Take over before saving this workflow.".into());
+        }
+        let view = state.view.lock().unwrap().clone();
+        if view.id != run_id
+            || !["stopped", "done", "waiting", "error"].contains(&view.phase.as_str())
+        {
+            return Err("This task is no longer available to save.".into());
+        }
+        let session = state.session.lock().unwrap().clone();
+        let settings = state.config.lock().unwrap().settings.clone();
+        (view, session, settings)
+    };
+    let source_steps = view.steps.len();
+    let correction = correction.filter(|s| !s.trim().is_empty());
+    let mut current_steps = view.steps;
+    if let Some(correction) = &correction {
+        workflow::add_correction(&mut current_steps, correction, view.elapsed_ms)?;
+    }
+    let mut steps = session.prior_steps;
+    if !steps.is_empty() {
+        steps.push(Step::note(
+            0,
+            "system",
+            "A new desktop instance started. The following actions belong to the latest run.",
+            0,
+        ));
+    }
+    steps.extend(current_steps);
+    if steps.len() > workflow::MAX_STEPS {
+        return Err("This workflow has reached its history limit. Start a new workflow.".into());
+    }
+    for (i, step) in steps.iter_mut().enumerate() {
+        step.id = i as u32 + 1;
+    }
+    let provider = Provider::new(&settings)?;
+    let learning = network(
+        app.clone(),
+        request_id.clone(),
+        provider.learn(&view.task, &session.memory, &steps),
+    )
+    .await?;
+    let workflow = Workflow {
+        id: view
+            .workflow_id
+            .unwrap_or_else(|| format!("workflow-{}-{}", platform::now(), run_id)),
+        learning,
+        task: view.task,
+        steps,
+        updated_at: 0,
+    };
+    let state = app.state::<AppState>();
+    let mut drafts = state.drafts.lock().unwrap();
+    if drafts.len() >= 8 {
+        drafts.clear();
+    }
+    drafts.insert(
+        request_id.clone(),
+        PreparedWorkflow {
+            run_id,
+            source_steps,
+            correction,
+            workflow: workflow.clone(),
+        },
+    );
+    Ok(WorkflowDraft {
+        token: request_id,
+        workflow,
+    })
+}
+
+#[tauri::command]
+fn save_workflow(
+    app: tauri::AppHandle,
+    token: Option<String>,
+    id: Option<String>,
+    learning: Learning,
+) -> Result<Workflow, String> {
+    let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if active.is_some() {
+        return Err("Take over before editing workflows.".into());
+    }
+    let (source, mut workflow) = if let Some(token) = &token {
+        state
+            .drafts
+            .lock()
+            .unwrap()
+            .get(token)
+            .cloned()
+            .map(|draft| (Some(draft.clone()), draft.workflow))
+            .ok_or("This workflow draft has expired. Prepare it again.")?
+    } else {
+        (
+            None,
+            state
+                .workflows
+                .lock()
+                .unwrap()
+                .get(&id.ok_or("Choose a workflow to edit.")?)?,
+        )
+    };
+    workflow.learning = learning;
+    let saved = state.workflows.lock().unwrap().save(workflow)?;
+    if let Some(source) = source {
+        let mut view = state.view.lock().unwrap();
+        if view.id == source.run_id && view.steps.len() == source.source_steps {
+            if let Some(correction) = source.correction {
+                let elapsed = view.elapsed_ms;
+                // The draft validated this correction before the model request.
+                workflow::add_correction(&mut view.steps, &correction, elapsed)?;
+            }
+            view.workflow_id = Some(saved.id.clone());
+            state.session.lock().unwrap().memory = saved.learning.memory.clone();
+        }
+    }
+    if let Some(token) = token {
+        state.drafts.lock().unwrap().remove(&token);
+    }
+    drop(active);
+    emit(&app);
+    Ok(saved)
+}
+
+#[tauri::command]
+fn delete_workflow(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if active.is_some() {
+        return Err("Take over before editing workflows.".into());
+    }
+    state.workflows.lock().unwrap().delete(&id)?;
+    drop(active);
+    emit(&app);
     Ok(())
 }
 
@@ -351,10 +538,14 @@ impl BrokerClient {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if cfg!(feature = "safety-tests") {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|_| "The independent emergency stop process could not start.")?;
+        .map_err(|_| "The independent input monitor process could not start.")?;
         let mut input = child
             .stdin
             .take()
@@ -405,7 +596,7 @@ impl BrokerClient {
     fn send(&self, command: Command) -> Result<(), End> {
         self.sender
             .try_send(command)
-            .map_err(|_| End::Stopped("The emergency stop connection is unavailable.".into()))
+            .map_err(|_| End::Stopped("The input monitor connection is unavailable.".into()))
     }
     fn heartbeat(
         &self,
@@ -447,10 +638,10 @@ impl BrokerClient {
             tokio::select! {
                 _=timer.tick()=>{
                     if self.ready { self.heartbeat(app,cancel,lease)?; }
-                    else if cancel.load(Ordering::SeqCst) || waiting_since.elapsed()>Duration::from_secs(5) {return Err(End::Stopped("The emergency stop startup was cancelled or timed out.".into()));}
+                    else if cancel.load(Ordering::SeqCst) || waiting_since.elapsed()>Duration::from_secs(5) {return Err(End::Stopped("The input monitor startup was cancelled or timed out.".into()));}
                 },
                 reply=self.receiver.recv()=>return match reply{
-                    Some(Reply::Stopped{reason})=>Err(End::Stopped(reason)),Some(Reply::Error{message})=>Err(End::Failed(message)),Some(value)=>{if matches!(value,Reply::Ready{..}){self.ready=true;}Ok(value)},None=>Err(End::Stopped("The emergency stop process exited. Input has been released.".into()))
+                    Some(Reply::Stopped{reason})=>Err(End::Stopped(reason)),Some(Reply::Error{message})=>Err(End::Failed(message)),Some(value)=>{if matches!(value,Reply::Ready{..}){self.ready=true;}Ok(value)},None=>Err(End::Stopped("The input monitor process exited. Input has been released.".into()))
                 }
             }
         }
@@ -467,7 +658,7 @@ impl BrokerClient {
             tokio::select! {
                 result=&mut future=>{self.heartbeat(app,cancel,None)?;return result.map_err(End::Failed);},
                 _=timer.tick()=>self.heartbeat(app,cancel,None)?,
-                reply=self.receiver.recv()=>return Err(match reply{Some(Reply::Stopped{reason})=>End::Stopped(reason),Some(Reply::Error{message})=>End::Failed(message),_=>End::Stopped("The emergency stop connection ended.".into())})
+                reply=self.receiver.recv()=>return Err(match reply{Some(Reply::Stopped{reason})=>End::Stopped(reason),Some(Reply::Error{message})=>End::Failed(message),_=>End::Stopped("The input monitor connection ended.".into())})
             }
         }
     }
@@ -495,61 +686,143 @@ enum End {
     Done(String),
 }
 
+fn record(app: &tauri::AppHandle, step: Step) {
+    app.state::<AppState>()
+        .view
+        .lock()
+        .unwrap()
+        .steps
+        .push(step);
+    emit(app);
+}
+fn action_status(app: &tauri::AppHandle, status: &str) {
+    if let Some(step) = app
+        .state::<AppState>()
+        .view
+        .lock()
+        .unwrap()
+        .steps
+        .last_mut()
+    {
+        step.status = status.into();
+    }
+    emit(app);
+}
+fn run_context(app: &tauri::AppHandle) -> String {
+    let state = app.state::<AppState>();
+    let steps = state.view.lock().unwrap().steps.clone();
+    let session = state.session.lock().unwrap();
+    let memory = if session.prior_steps.is_empty() {
+        session.memory.clone()
+    } else {
+        format!(
+            "{}\n\nEvidence from a PREVIOUS desktop instance; locate every target again:\n{}",
+            session.memory,
+            workflow::context("", &session.prior_steps)
+        )
+    };
+    workflow::context(&memory, &steps)
+}
+
 async fn controller(
     app: tauri::AppHandle,
     settings: Settings,
     task: String,
-    mut history: String,
     cancel: Arc<AtomicBool>,
-    simulate: bool,
 ) {
-    let started = Instant::now();
-    let result=async{
-        let mut broker=BrokerClient::spawn(simulate).map_err(End::Failed)?;
-        match broker.signal(&app,&cancel,None).await?{Reply::Ready{bounds}=>broker.bounds=bounds,_=>return Err(End::Failed("The stop process did not become ready.".into()))}
-        progress(&app,"countdown","Starting in 3 seconds. Let go of your mouse and keyboard.",started);
-        if let Some(window)=app.get_webview_window("main"){window.minimize().map_err(|_|End::Failed("The main window could not be minimized safely.".into()))?;}
-        match broker.signal(&app,&cancel,None).await?{Reply::Armed=>(),_=>return Err(End::Failed("The stop process could not arm.".into()))}
-        if simulate{
-            progress(&app,"running","Stop test is running. Press Ctrl + Alt + F8, click STOP, or use your mouse or keyboard.",started);
-            broker.during(&app,&cancel,async{tokio::time::sleep(Duration::from_secs(30)).await;Ok(())}).await?;
-            return Err(End::Done("The safe stop test finished. No desktop input was sent.".into()));
+    let elapsed = app.state::<AppState>().view.lock().unwrap().elapsed_ms;
+    let started = Instant::now()
+        .checked_sub(Duration::from_millis(elapsed))
+        .unwrap_or_else(Instant::now);
+    let result = async {
+        let mut broker = BrokerClient::spawn(false).map_err(End::Failed)?;
+        match broker.signal(&app, &cancel, None).await? {
+            Reply::Ready { bounds } => broker.bounds = bounds,
+            _ => return Err(End::Failed("The input monitor did not become ready.".into())),
         }
-        let provider=Provider::new(&settings).map_err(End::Failed)?;
-        let mut proposed=false;let mut previous_image=0u64;let mut unchanged_frames=0;
-        for step in 1..=settings.max_steps{
-            if started.elapsed()>Duration::from_secs(600){return Err(End::Stopped("The ten-minute task limit was reached.".into()));}
-            progress(&app,"running",if proposed{"Checking the result…"}else{"Taking a look at your desktop…"},started);
-            let excluded=broker.bounds;let max_edge=settings.screenshot_max_edge;
-            let screen=broker.during(&app,&cancel,async move{tokio::task::spawn_blocking(move||capture::capture(step as u64,max_edge,excluded)).await.map_err(|_|"The capture worker stopped unexpectedly.".to_owned())?}).await?;
-            use std::hash::{Hash,Hasher};let mut hash=std::collections::hash_map::DefaultHasher::new();screen.jpeg.hash(&mut hash);let image_hash=hash.finish();
-            if image_hash==previous_image{unchanged_frames+=1;}else{unchanged_frames=0;}previous_image=image_hash;
-            if unchanged_frames>=4{return Err(End::Question("The screen has not changed after several steps. Could you bring the right window into view, then tell me how to continue?".into()));}
-            progress(&app,"running",if proposed{"Checking whether your task is complete…"}else{"Thinking about the next step…"},started);
-            let decision=broker.during(&app,&cancel,provider.decide(&task,&history,provider::Observation{frame_id:screen.frame.id,bytes:&screen.jpeg,width:screen.frame.image_width,height:screen.frame.image_height,mime:"image/jpeg"})).await?;
-            progress(&app,"running",&decision.description,started);
-            match &decision.action{
-                Action::Finish{summary} if proposed=>return Err(End::Done(summary.clone())),
-                Action::Finish{summary}=>{history.push_str(&format!("\nCompletion proposed: {summary}. Check this against the original task in the next fresh screenshot. Finish only if visibly complete."));proposed=true;},
-                Action::AskUser{question}=>return Err(End::Question(question.clone())),
-                Action::Wait{duration_ms}=>{proposed=false;let duration=*duration_ms;broker.during(&app,&cancel,async move{tokio::time::sleep(Duration::from_millis(duration as u64)).await;Ok(())}).await?;},
-                Action::Observe=>{proposed=false;},
-                action=>{
-                    proposed=false;let action=action.clone();let check_action=action.clone();
-                    let mut frame=screen.frame.clone();
-                    broker.during(&app,&cancel,async move{tokio::task::spawn_blocking(move||capture::unchanged(&screen,&check_action)).await.map_err(|_|"The target check failed.".to_owned())?}).await?;
-                    // The model coordinates were just revalidated against the live desktop.
-                    frame.captured_ms=platform::now();
-                    broker.send(Command::Execute{sequence:step as u64,sent_ms:platform::now(),frame,action})?;
-                    match broker.signal(&app,&cancel,Some(step as u64)).await?{Reply::Completed{sequence}if sequence==step as u64=>(),_=>return Err(End::Failed("The input acknowledgement did not match this step.".into()))}
-                    broker.during(&app,&cancel,async{tokio::time::sleep(Duration::from_millis(350)).await;Ok(())}).await?;
+        progress(&app, "countdown", "Starting in 2 seconds. Move your mouse or press any key to interrupt.", started);
+        match broker.signal(&app, &cancel, None).await? {
+            Reply::Armed => (),
+            _ => return Err(End::Failed("The input monitor could not start.".into())),
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            window.minimize().map_err(|_| End::Failed("The main window could not be minimized.".into()))?;
+        }
+        broker.during(&app, &cancel, async { tokio::time::sleep(Duration::from_millis(180)).await; Ok(()) }).await?;
+        let provider = Provider::new(&settings).map_err(End::Failed)?;
+        let mut previous_image = 0u64;
+        let mut unchanged_frames = 0;
+        let mut moved_targets = 0;
+        for _ in 0..settings.max_steps {
+            let step = app.state::<AppState>().view.lock().unwrap().steps.len() as u32 + 1;
+            if step as usize >= workflow::MAX_STEPS - 2 { return Err(End::Question("This session is full. Save it as a workflow to continue in a fresh run.".into())); }
+            progress(&app, "running", "Taking a look at your desktop…", started);
+            let excluded = broker.bounds;
+            let max_edge = settings.screenshot_max_edge;
+            let screen = broker.during(&app, &cancel, async move {
+                tokio::task::spawn_blocking(move || capture::capture(step as u64, max_edge, excluded)).await
+                    .map_err(|_| "The capture worker stopped unexpectedly.".to_owned())?
+            }).await?;
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            screen.jpeg.hash(&mut hash);
+            let image_hash = hash.finish();
+            if image_hash == previous_image { unchanged_frames += 1; } else { unchanged_frames = 0; }
+            previous_image = image_hash;
+            if unchanged_frames >= 4 { return Err(End::Question("The screen has not changed after several steps. Bring the right window into view, then tell me how to continue.".into())); }
+            progress(&app, "running", "Choosing the next action…", started);
+            let history = run_context(&app);
+            let decision = broker.during(&app, &cancel, provider.decide(&task, &history, provider::Observation {
+                frame_id: screen.frame.id, bytes: &screen.jpeg, width: screen.frame.image_width, height: screen.frame.image_height, mime: "image/jpeg",
+            })).await?;
+            progress(&app, "running", &decision.description, started);
+            record(&app, Step::action(step, decision.description, decision.action.clone(), &screen.frame, started.elapsed().as_millis() as u64));
+            match &decision.action {
+                Action::Finish { summary } => {
+                    action_status(&app, "completed");
+                    return Err(End::Done(summary.clone()));
+                }
+                Action::AskUser { question } => {
+                    action_status(&app, "recorded");
+                    return Err(End::Question(question.clone()));
+                }
+                Action::Wait { duration_ms } => {
+                    let duration = *duration_ms;
+                    broker.during(&app, &cancel, async move { tokio::time::sleep(Duration::from_millis(duration as u64)).await; Ok(()) }).await?;
+                    action_status(&app, "completed");
+                }
+                Action::Observe => action_status(&app, "completed"),
+                action => {
+                    let action = action.clone();
+                    let check_action = action.clone();
+                    let mut frame = screen.frame.clone();
+                    // Revalidation failure is recoverable: observe again without clicking a moved target.
+                    let checked = broker.during(&app, &cancel, async move {
+                        tokio::task::spawn_blocking(move || Ok(capture::unchanged(&screen, &check_action))).await
+                            .map_err(|_| "The target check failed.".to_owned())?
+                    }).await?;
+                    if let Err(reason) = checked {
+                        action_status(&app, "skipped");
+                        record(&app, Step::note(step + 1, "system", reason, started.elapsed().as_millis() as u64));
+                        moved_targets += 1;
+                        if moved_targets >= 3 { return Err(End::Question("The target keeps changing. Bring it into view and tell me when to continue.".into())); }
+                        continue;
+                    }
+                    moved_targets = 0;
+                    // The target and layout were just checked against the live physical desktop.
+                    frame.captured_ms = platform::now();
+                    broker.send(Command::Execute { sequence: step as u64, sent_ms: platform::now(), frame, action: action.clone() })?;
+                    match broker.signal(&app, &cancel, Some(step as u64)).await? {
+                        Reply::Completed { sequence } if sequence == step as u64 => (),
+                        _ => return Err(End::Failed("The input acknowledgement did not match this step.".into())),
+                    }
+                    action_status(&app, "completed");
+                    let settle = if matches!(action, Action::Text { .. } | Action::Move { .. }) { 80 } else { 180 };
+                    broker.during(&app, &cancel, async move { tokio::time::sleep(Duration::from_millis(settle)).await; Ok(()) }).await?;
                 }
             }
-            {app.state::<AppState>().view.lock().unwrap().steps.push(Step{id:step,description:decision.description.clone()});}emit(&app);
-            history.push_str(&format!("\nStep {step}: {}",decision.description));
-            if history.len()>12000 {let mut boundary=history.len()-10000;while !history.is_char_boundary(boundary){boundary+=1;}history=history[boundary..].to_owned();}
         }
-        Err::<(),End>(End::Stopped("The task reached its step limit. Review the progress before starting again.".into()))
+        Err::<(), End>(End::Stopped("The task reached its step limit. Refine the instructions to continue.".into()))
     }.await;
     let end = result
         .err()
@@ -559,10 +832,34 @@ async fn controller(
         let mut active = state.active.lock().unwrap();
         let mut view = state.view.lock().unwrap();
         view.elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Some(step) = view
+            .steps
+            .last_mut()
+            .filter(|step| step.status == "pending")
+        {
+            step.status = if matches!(end, End::Failed(_)) {
+                "failed"
+            } else {
+                "interrupted"
+            }
+            .into();
+        }
         match end {
             End::Stopped(message) => {
+                view.interrupted = message == "Stopped because you used the mouse or keyboard.";
                 view.phase = "stopped".into();
-                view.message = message;
+                view.message = if view.interrupted {
+                    "You took over. Tell me what to do differently, and I’ll use your correction when we continue.".into()
+                } else {
+                    message
+                };
+                let note = if view.interrupted {
+                    "User took over with mouse or keyboard input. Treat the latest attempted action as a possible mistake. Wait for a correction; do not assume why it was wrong."
+                } else {
+                    "The run stopped. Check the last action and the current desktop before continuing."
+                };
+                let step = Step::note(view.steps.len() as u32 + 1, "system", note, view.elapsed_ms);
+                view.steps.push(step);
             }
             End::Failed(message) => {
                 view.phase = "error".into();
@@ -572,7 +869,6 @@ async fn controller(
                 view.phase = "waiting".into();
                 view.message = "Control is paused while you reply.".into();
                 view.question = question;
-                *state.continuation.lock().unwrap() = history;
             }
             End::Done(summary) => {
                 view.phase = "done".into();
@@ -616,15 +912,19 @@ pub fn run() {
         return;
     }
     let _mutex = platform::Handle(mutex);
+    let config = ConfigStore::beside_executable();
+    let workflows = WorkflowStore::load(config.path.with_file_name("workflows.json"));
     let state = AppState {
-        config: Mutex::new(ConfigStore::beside_executable()),
+        config: Mutex::new(config),
         view: Mutex::new(RunView::default()),
         active: Mutex::new(None),
         ui_at: AtomicU64::new(platform::now()),
         next_id: AtomicU64::new(0),
         requests: Mutex::new(HashMap::new()),
         speech: Mutex::new(None),
-        continuation: Mutex::new(String::new()),
+        session: Mutex::new(Session::default()),
+        workflows: Mutex::new(workflows),
+        drafts: Mutex::new(HashMap::new()),
     };
     let result = tauri::Builder::default()
         .manage(state)
@@ -635,9 +935,11 @@ pub fn run() {
             list_models,
             test_connection,
             cancel_request,
-            discover_servers,
             start_task,
-            start_stop_test,
+            get_workflow,
+            prepare_workflow,
+            save_workflow,
+            delete_workflow,
             stop_task,
             start_dictation,
             stop_dictation

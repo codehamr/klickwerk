@@ -1,32 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import * as Switch from "@radix-ui/react-switch";
 import {
-  Check,
   ChevronDown,
   Eye,
   EyeOff,
   FolderLock,
   LoaderCircle,
-  Monitor,
   RefreshCw,
-  ShieldCheck,
   SlidersHorizontal,
   Unplug,
   Wifi,
 } from "lucide-react";
 import { api } from "../lib/bridge";
 import type { Settings as SettingsData, Snapshot } from "../lib/types";
-import { errorText } from "../lib/utils";
+import { errorText, normalizeServerUrl } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
-import { Shortcut } from "./shortcut";
 
 interface Props {
   snapshot: Snapshot;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (snapshot: Snapshot) => void;
-  onStopTest: () => void;
   returnFocus: () => void;
 }
 
@@ -35,7 +30,6 @@ export function SettingsDialog({
   open,
   onOpenChange,
   onSaved,
-  onStopTest,
   returnFocus,
 }: Props) {
   const [draft, setDraft] = useState<SettingsData>(snapshot.settings);
@@ -47,9 +41,7 @@ export function SettingsDialog({
     kind: "success" | "error" | "info";
     text: string;
   } | null>(null);
-  const [busy, setBusy] = useState<
-    "models" | "test" | "save" | "discover" | null
-  >(null);
+  const [busy, setBusy] = useState<"models" | "test" | "save" | null>(null);
   const request = useRef("");
   const previousOpen = useRef(false);
 
@@ -83,7 +75,10 @@ export function SettingsDialog({
     if (field === "base_url") {
       setModels([]);
       try {
-        if (new URL(String(value)).origin !== new URL(draft.base_url).origin)
+        if (
+          normalizeServerUrl(String(value)).origin !==
+          normalizeServerUrl(draft.base_url).origin
+        )
           setKey("");
       } catch {
         setKey("");
@@ -139,43 +134,6 @@ export function SettingsDialog({
     }
   }
 
-  async function discover() {
-    const id = crypto.randomUUID();
-    request.current = id;
-    setBusy("discover");
-    setNotice(null);
-    try {
-      const found = await api.discover();
-      if (request.current !== id) return;
-      if (found.length) {
-        setDraft((current) => ({
-          ...current,
-          base_url: found[0].base_url,
-          model:
-            found[0].models.length === 1 ? found[0].models[0] : current.model,
-        }));
-        setKey("");
-        setModels(found[0].models);
-        setNotice({
-          kind: "success",
-          text: `Found ${found[0].name} on this PC. ${found.length > 1 ? "Other servers are available; enter their URL to switch." : "Choose your vision model below."}`,
-        });
-      } else
-        setNotice({
-          kind: "info",
-          text: "No local server found. Start Ollama or your compatible server, then try again.",
-        });
-    } catch (error) {
-      if (request.current === id)
-        setNotice({ kind: "error", text: errorText(error) });
-    } finally {
-      if (request.current === id) {
-        request.current = "";
-        setBusy(null);
-      }
-    }
-  }
-
   async function save() {
     setBusy("save");
     setNotice(null);
@@ -198,8 +156,8 @@ export function SettingsDialog({
       }}
     >
       <DialogContent
-        title="Make yourself at home"
-        description="A few settings. Then you're ready to go."
+        title="Your connection"
+        description="Enter your server URL and choose a vision model."
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           returnFocus();
@@ -240,61 +198,23 @@ export function SettingsDialog({
               id="connection-panel"
               aria-labelledby="connection-tab"
             >
-              <div className="connection-options" aria-label="Connection type">
-                <button
-                  type="button"
-                  className={draft.provider === "local" ? "selected" : ""}
-                  aria-pressed={draft.provider === "local"}
-                  onClick={() => update("provider", "local")}
-                >
-                  <Monitor size={21} />
-                  <span>
-                    <strong>On this PC</strong>
-                    <small>Ollama or a local server</small>
-                  </span>
-                  {draft.provider === "local" && <Check size={16} />}
-                </button>
-                <button
-                  type="button"
-                  className={draft.provider === "custom" ? "selected" : ""}
-                  aria-pressed={draft.provider === "custom"}
-                  onClick={() => update("provider", "custom")}
-                >
-                  <Wifi size={21} />
-                  <span>
-                    <strong>Custom server</strong>
-                    <small>OpenAI-compatible API</small>
-                  </span>
-                  {draft.provider === "custom" && <Check size={16} />}
-                </button>
-              </div>
               <div className="field">
                 <div className="label-row">
-                  <label htmlFor="server-url">Server address</label>
-                  {draft.provider === "local" && (
-                    <button
-                      type="button"
-                      className="text-button"
-                      disabled={!!busy}
-                      onClick={() => void discover()}
-                    >
-                      {busy === "discover" ? (
-                        <LoaderCircle className="spin" size={13} />
-                      ) : (
-                        <Wifi size={13} />
-                      )}
-                      Find automatically
-                    </button>
-                  )}
+                  <label htmlFor="server-url">Server URL</label>
                 </div>
                 <input
                   id="server-url"
-                  type="url"
+                  type="text"
                   spellCheck={false}
                   autoComplete="off"
                   value={draft.base_url}
                   onChange={(e) => update("base_url", e.target.value)}
-                  placeholder="http://localhost:11434/v1"
+                  onBlur={(event) => {
+                    if (event.relatedTarget instanceof HTMLButtonElement)
+                      return;
+                    if (draft.base_url.trim() && !busy) void loadModels();
+                  }}
+                  placeholder="localhost:11434 or https://your-server/v1"
                 />
               </div>
               <div className="field">
@@ -502,24 +422,6 @@ export function SettingsDialog({
                       </option>
                     ))}
                 </select>
-              </div>
-              <div className="safety-setting">
-                <ShieldCheck size={21} />
-                <div>
-                  <strong>Your emergency stop</strong>
-                  <p>Always available while a task runs.</p>
-                  <Shortcut compact />
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => {
-                      onOpenChange(false);
-                      onStopTest();
-                    }}
-                  >
-                    Try a safe stop test
-                  </button>
-                </div>
               </div>
             </section>
           )}

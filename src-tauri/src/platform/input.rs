@@ -47,12 +47,12 @@ impl HeldInput {
                 OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr())
             };
             if handle.is_null() {
-                return Err("The emergency input cleanup channel could not be created.".into());
+                return Err("The input cleanup channel could not be created.".into());
             }
             let mapping = Handle(handle);
             let view = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size_of::<Held>());
             if view.Value.is_null() {
-                return Err("The emergency input cleanup channel could not be mapped.".into());
+                return Err("The input cleanup channel could not be mapped.".into());
             }
             if create {
                 std::ptr::write_bytes(view.Value, 0, size_of::<Held>());
@@ -195,13 +195,13 @@ impl Drop for HeldInput {
 }
 
 fn key_event(vk: u16, up: bool) -> INPUT {
-    let extended = matches!(vk, 0x21..=0x28 | 0x2d | 0x2e);
+    let extended = matches!(vk, 0x21..=0x28 | 0x2d | 0x2e | 0x5b);
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: vk,
-                wScan: 0,
+                wScan: unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16,
                 dwFlags: (if up { KEYEVENTF_KEYUP } else { 0 })
                     | (if extended { KEYEVENTF_EXTENDEDKEY } else { 0 }),
                 time: 0,
@@ -240,10 +240,12 @@ fn mouse_event(x: i32, y: i32, data: u32, flags: u32) -> INPUT {
     }
 }
 fn movement(frame: &Frame, x: i32, y: i32) -> Result<INPUT, String> {
-    let (px, py) = frame.map(x, y).ok_or("The pointer target is invalid.")?;
+    let (x, y) = frame
+        .absolute(x, y)
+        .ok_or("The pointer target is invalid.")?;
     Ok(mouse_event(
-        ((px - frame.left) as i64 * 65535 / (frame.width.saturating_sub(1).max(1)) as i64) as i32,
-        ((py - frame.top) as i64 * 65535 / (frame.height.saturating_sub(1).max(1)) as i64) as i32,
+        x,
+        y,
         0,
         MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
     ))
@@ -421,13 +423,20 @@ impl Plan {
             }
             Action::Text { text } => {
                 // Each batch is a complete Unicode scalar with balanced down/up events.
-                for character in text.chars() {
+                let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                for character in normalized.chars() {
                     let mut units = [0; 2];
                     let units = character.encode_utf16(&mut units);
                     let mut events = Vec::new();
-                    for &unit in units.iter() {
-                        events.push(unicode_event(unit, false));
-                        events.push(unicode_event(unit, true));
+                    if matches!(character, '\n' | '\t') {
+                        let vk = if character == '\n' { VK_RETURN } else { VK_TAB };
+                        events.push(key_event(vk, false));
+                        events.push(key_event(vk, true));
+                    } else {
+                        for &unit in units.iter() {
+                            events.push(unicode_event(unit, false));
+                            events.push(unicode_event(unit, true));
+                        }
                     }
                     batches.push_back(Batch {
                         events,
@@ -443,6 +452,7 @@ impl Plan {
                         Modifier::Ctrl => VK_CONTROL,
                         Modifier::Alt => VK_MENU,
                         Modifier::Shift => VK_SHIFT,
+                        Modifier::Win => VK_LWIN,
                     })
                     .collect();
                 let vk = key_code(&key).ok_or("Unsupported key.")?;

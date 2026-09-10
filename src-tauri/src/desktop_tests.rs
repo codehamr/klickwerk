@@ -1,4 +1,4 @@
-//! Isolated native tests. Only the global stop chord is injected into a fixture-owned window.
+//! Isolated native tests. External input is injected only into disposable fixture windows.
 use super::*;
 use crate::{action::Action, guard::Frame};
 use windows_sys::Win32::{
@@ -47,82 +47,94 @@ fn check(condition: bool, message: &str) -> Result<(), String> {
         Err(message.into())
     }
 }
-fn bar() -> HWND {
+fn monitor() -> HWND {
     unsafe {
         FindWindowW(
-            platform::wide("KlickwerkEmergencyStopV2").as_ptr(),
+            platform::wide("KlickwerkInputMonitor").as_ptr(),
             std::ptr::null(),
         )
     }
 }
-
+fn fixture_key(tag: usize) {
+    let events: Vec<INPUT> = [false, true]
+        .into_iter()
+        .map(|up| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_SHIFT,
+                    wScan: 0,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                    time: 0,
+                    dwExtraInfo: tag,
+                },
+            },
+        })
+        .collect();
+    unsafe {
+        SendInput(
+            events.len() as u32,
+            events.as_ptr(),
+            size_of::<INPUT>() as i32,
+        );
+    }
+}
+fn fixture_mouse(tag: usize) {
+    let event = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 1,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
+                time: 0,
+                dwExtraInfo: tag,
+            },
+        },
+    };
+    unsafe {
+        SendInput(1, &event, size_of::<INPUT>() as i32);
+    }
+}
 async fn suite() -> Result<(), String> {
-    let mut count = 0;
     {
         let mut broker = BrokerClient::spawn(true)?;
         armed(&mut broker).await?;
-        let window = bar();
-        check(!window.is_null(), "independent native stop bar exists")?;
-        count += 1;
+        let window = monitor();
         check(
-            unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } & WS_EX_TOPMOST as isize != 0,
-            "stop bar has the always-on-top style",
+            !window.is_null() && unsafe { IsWindowVisible(window) } == 0,
+            "input monitoring runs without a visible stop bar",
         )?;
-        count += 1;
         check(
-            unsafe { IsWindowVisible(window) } != 0,
-            "stop bar remains visible after arming",
+            broker.bounds == [0; 4],
+            "no screenshot region is hidden by a stop bar",
         )?;
-        count += 1;
-        let mut text = [0u16; 128];
-        unsafe {
-            GetWindowTextW(window, text.as_mut_ptr(), 128);
-        }
+        broker
+            .sender
+            .try_send(Command::Stop)
+            .map_err(|_| "Could not close the fixture.")?;
         check(
-            String::from_utf16_lossy(&text).contains("Ctrl + Alt + F8"),
-            "emergency chord is present in the accessible window title",
+            matches!(next(&mut broker, false, 1500).await?, Reply::Stopped { .. }),
+            "internal cancellation stops the broker",
         )?;
-        count += 1;
-        let start = Instant::now();
-        unsafe {
-            PostMessageW(window, WM_COMMAND, 1, 0);
-        }
-        check(
-            matches!(next(&mut broker,true,1500).await?,Reply::Stopped{reason}if reason.contains("stop bar")),
-            "STOP button latches termination",
-        )?;
-        count += 1;
-        println!(
-            "STOP button fixture latency: {} ms",
-            start.elapsed().as_millis()
-        );
     }
     {
         let mut broker = BrokerClient::spawn(true)?;
         armed(&mut broker).await?;
-        let start = Instant::now();
         check(
-            matches!(next(&mut broker,false,2000).await?,Reply::Stopped{reason}if reason.contains("heartbeat")),
+            matches!(next(&mut broker, false, 2000).await?, Reply::Stopped { reason } if reason.contains("heartbeat")),
             "heartbeat loss stops an armed broker",
         )?;
-        count += 1;
-        println!(
-            "Heartbeat-loss fixture latency: {} ms",
-            start.elapsed().as_millis()
-        );
     }
     {
         let mut broker = BrokerClient::spawn(true)?;
         ready(&mut broker).await?;
-        broker
-            .sender
-            .try_send(Command::Stop)
-            .map_err(|_| "Cannot cancel countdown.")?;
+        fixture_mouse(0);
         check(
-            matches!(next(&mut broker, false, 1500).await?, Reply::Stopped { .. }),
-            "countdown can be cancelled without sending input",
+            matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason } if reason.contains("mouse or keyboard")),
+            "mouse takeover cancels the countdown",
         )?;
-        count += 1;
     }
     {
         let mut broker = BrokerClient::spawn(true)?;
@@ -146,12 +158,11 @@ async fn suite() -> Result<(), String> {
                 },
                 action: Action::Move { x: 1, y: 1 },
             })
-            .map_err(|_| "Cannot send fixture command.")?;
+            .map_err(|_| "Cannot send fixture input.")?;
         check(
             matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { .. }),
             "input before arming is refused",
         )?;
-        count += 1;
     }
     {
         let mut broker = BrokerClient::spawn(true)?;
@@ -160,37 +171,15 @@ async fn suite() -> Result<(), String> {
         drop(receiver);
         broker.sender = unused;
         check(
-            matches!(next(&mut broker,false,1500).await?,Reply::Stopped{reason}if reason.contains("connection")),
+            matches!(next(&mut broker, false, 1500).await?, Reply::Stopped { reason } if reason.contains("connection")),
             "controller pipe loss stops input",
         )?;
-        count += 1;
-    }
-    unsafe {
-        let mut message: MSG = std::mem::zeroed();
-        PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
-        check(
-            RegisterHotKey(
-                std::ptr::null_mut(),
-                999,
-                MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                VK_F8 as u32,
-            ) != 0,
-            "fixture reserves the stop chord",
-        )?;
-        count += 1;
-        let result=async{
-            let mut broker=BrokerClient::spawn(true)?;
-            check(matches!(next(&mut broker,false,5000).await?,Reply::Error{message}if message.contains("already used")),"hotkey conflict prevents controller startup")
-        }.await;
-        UnregisterHotKey(std::ptr::null_mut(), 999);
-        result?;
-        count += 1;
     }
     unsafe {
         let window = CreateWindowExW(
             0,
             platform::wide("STATIC").as_ptr(),
-            platform::wide("Disposable stop-shortcut fixture").as_ptr(),
+            platform::wide("Disposable takeover fixture").as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             100,
             150,
@@ -205,25 +194,25 @@ async fn suite() -> Result<(), String> {
             return Err("The isolated focus window could not be created.".into());
         }
         SetForegroundWindow(window);
-        let result=async{
-            let mut broker=BrokerClient::spawn(true)?;armed(&mut broker).await?;
-            check(GetForegroundWindow()==window,"stop bar does not steal focus from the fixture app")?;
-            let mut events=Vec::new();
-            for (key,up) in [(VK_CONTROL,false),(VK_MENU,false),(VK_F8,false),(VK_F8,true),(VK_MENU,true),(VK_CONTROL,true)]{
-                events.push(INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,wScan:0,dwFlags:if up{KEYEVENTF_KEYUP}else{0},time:0,dwExtraInfo:0}}});
+        let result = async {
+            for mouse in [false, true] {
+                let mut broker = BrokerClient::spawn(true)?;
+                armed(&mut broker).await?;
+                check(GetForegroundWindow() == window, "the input monitor leaves the target app focused")?;
+                if mouse { fixture_mouse(platform::input::INPUT_TAG); } else { fixture_key(platform::input::INPUT_TAG); }
+                check(next(&mut broker, true, 150).await.is_err(), "tagged agent input does not interrupt itself")?;
+                let started = Instant::now();
+                if mouse { fixture_mouse(0); } else { fixture_key(0); }
+                check(matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason } if reason.contains("mouse or keyboard")),
+                    if mouse { "external mouse movement stops the broker" } else { "external keyboard input stops the broker" })?;
+                println!("Takeover fixture latency: {} ms", started.elapsed().as_millis());
             }
-            let start=Instant::now();
-            check(SendInput(events.len() as u32,events.as_ptr(),size_of::<INPUT>() as i32)==events.len() as u32,"fixture sends the global stop chord with balanced key releases")?;
-            check(matches!(next(&mut broker,true,1500).await?,Reply::Stopped{reason}if reason.contains("Ctrl + Alt + F8")),"global stop works while another window has focus")?;
-            println!("Global shortcut fixture latency: {} ms",start.elapsed().as_millis());Ok::<_,String>(())
+            Ok::<(), String>(())
         }.await;
         DestroyWindow(window);
         result?;
-        count += 3;
     }
-    println!(
-        "Native safety fixture: {count} checks passed. No model requests or task input were sent."
-    );
+    println!("Native input monitoring checks passed on the isolated desktop.");
     Ok(())
 }
 
@@ -440,11 +429,11 @@ async fn input_suite() -> Result<(), String> {
         check(unsafe{GetAsyncKeyState(VK_CONTROL as i32)}>=0,"controller releases the Ctrl modifier")?;
         frame.captured_ms=platform::now();
         broker.sender.try_send(Command::Execute{sequence:5,sent_ms:platform::now(),frame,action:Action::Text{text:"x".repeat(3000)}}).map_err(|_|"Cannot begin bounded typing fixture.")?;
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        broker.sender.try_send(Command::Stop).map_err(|_|"Cannot stop bounded typing fixture.")?;
-        check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"STOP interrupts a long typing action")?;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        fixture_key(0);
+        check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"external keyboard input interrupts a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
-        check(after==read()&&after.len()<3018,"no further text arrives after STOP")?;
+        check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
         println!("Disposable input fixture: 8 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();

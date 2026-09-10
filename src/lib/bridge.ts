@@ -4,7 +4,9 @@ import type {
   Snapshot,
   Settings,
   Models,
-  Discovery,
+  Workflow,
+  WorkflowDraft,
+  Learning,
   SpeechUpdate,
 } from "./types";
 
@@ -37,14 +39,36 @@ export const api = {
     call<Models>("list_models", { settings, key, requestId }),
   test: (settings: Settings, key: string | null, requestId: string) =>
     call<string>("test_connection", { settings, key, requestId }),
-  discover: () => call<Discovery[]>("discover_servers"),
   cancelRequest: (requestId: string) =>
     call<void>("cancel_request", { requestId }),
-  start: (task: string, reply?: string) =>
-    call<void>("start_task", { task, reply: reply ?? null }),
+  start: (
+    task: string,
+    reply?: string,
+    resumeRunId?: number,
+    workflowId?: string,
+  ) =>
+    call<void>("start_task", {
+      task,
+      reply: reply ?? null,
+      resumeRunId: resumeRunId ?? null,
+      workflowId: workflowId ?? null,
+    }),
+  getWorkflow: (id: string) => call<Workflow>("get_workflow", { id }),
+  prepareWorkflow: (runId: number, correction: string, requestId: string) =>
+    call<WorkflowDraft>("prepare_workflow", {
+      runId,
+      correction: correction || null,
+      requestId,
+    }),
+  saveWorkflow: (learning: Learning, token?: string, id?: string) =>
+    call<Workflow>("save_workflow", {
+      learning,
+      token: token ?? null,
+      id: id ?? null,
+    }),
+  deleteWorkflow: (id: string) => call<void>("delete_workflow", { id }),
   stop: () => call<void>("stop_task"),
   heartbeat: () => call<void>("ui_heartbeat"),
-  stopTest: () => call<void>("start_stop_test"),
   speechStart: () => call<void>("start_dictation"),
   speechStop: () => call<void>("stop_dictation"),
   onState: (callback: (snapshot: Snapshot) => void) =>

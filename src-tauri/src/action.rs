@@ -67,6 +67,7 @@ pub enum Modifier {
     Ctrl,
     Alt,
     Shift,
+    Win,
 }
 
 impl Decision {
@@ -119,14 +120,11 @@ impl Action {
             Self::Text { text } => !text.is_empty() && text.len() <= 4096 && !text.contains('\0'),
             Self::Key { key, modifiers } => {
                 key_code(key).is_some()
-                    && modifiers.len() <= 3
+                    && modifiers.len() <= 4
                     && modifiers
                         .iter()
                         .enumerate()
                         .all(|(i, m)| !modifiers[..i].contains(m))
-                    && !(key == "F8"
-                        && modifiers.contains(&Modifier::Ctrl)
-                        && modifiers.contains(&Modifier::Alt))
             }
             Self::Wait { duration_ms } => (1..=2000).contains(duration_ms),
             Self::AskUser { question } => !question.trim().is_empty() && question.len() <= 4096,
@@ -142,10 +140,12 @@ impl Action {
 }
 
 pub fn key_code(key: &str) -> Option<u16> {
-    Some(match key {
+    Some(match key.to_ascii_uppercase().as_str() {
         "ENTER" => 0x0d,
         "TAB" => 0x09,
-        "ESCAPE" => 0x1b,
+        "ESCAPE" | "ESC" => 0x1b,
+        "WIN" | "SUPER" | "META" => 0x5b,
+        "INSERT" => 0x2d,
         "SPACE" => 0x20,
         "BACKSPACE" => 0x08,
         "DELETE" => 0x2e,
@@ -200,7 +200,7 @@ mod tests {
                 modifiers: vec![Modifier::Ctrl, Modifier::Alt]
             }
             .validate(100, 100)
-            .is_err()
+            .is_ok()
         );
         assert!(
             Action::Text {
@@ -216,6 +216,8 @@ mod tests {
             .validate(100, 100)
             .is_err()
         );
-        assert!(key_code("WIN").is_none());
+        assert_eq!(key_code("WIN"), Some(0x5b));
+        assert_eq!(key_code("Enter"), Some(0x0d));
+        assert_eq!(key_code("a"), Some(0x41));
     }
 }

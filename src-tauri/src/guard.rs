@@ -1,7 +1,6 @@
 use crate::action::Action;
 use serde::{Deserialize, Serialize};
 
-pub const HOTKEY: &str = "Ctrl + Alt + F8";
 pub const HEARTBEAT_TIMEOUT_MS: u64 = 700;
 pub const LEASE_MS: u64 = 250;
 
@@ -20,6 +19,18 @@ pub struct Frame {
 }
 
 impl Frame {
+    pub fn absolute(&self, x: i32, y: i32) -> Option<(i32, i32)> {
+        let (px, py) = self.map(x, y)?;
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
+        // Aim at the center of a physical pixel in the 16-bit virtual desktop grid.
+        Some((
+            (((px - self.left) as i64 * 65536 + 32768) / self.width as i64).clamp(0, 65535) as i32,
+            (((py - self.top) as i64 * 65536 + 32768) / self.height as i64).clamp(0, 65535) as i32,
+        ))
+    }
+
     pub fn map(&self, x: i32, y: i32) -> Option<(i32, i32)> {
         if self.image_width == 0
             || self.image_height == 0
@@ -192,6 +203,45 @@ mod tests {
         for x in 0..1280 {
             let (px, _) = f.map(x, 0).unwrap();
             assert!((-1920..1920).contains(&px));
+            let (absolute, _) = f.absolute(x, 0).unwrap();
+            assert_eq!(
+                absolute as i64 * f.width as i64 / 65536,
+                (px - f.left) as i64
+            );
+        }
+    }
+    #[test]
+    fn physical_pixel_targets_round_trip_at_common_display_scales() {
+        for (width, height, image_width, image_height) in [
+            (1920, 1080, 1280, 720),
+            (2560, 1440, 1280, 720),
+            (3840, 2160, 1920, 1080),
+            (4480, 1440, 1280, 411),
+        ] {
+            let frame = Frame {
+                id: 1,
+                captured_ms: 0,
+                left: -1920,
+                top: -540,
+                width,
+                height,
+                image_width,
+                image_height,
+                foreground: 0,
+            };
+            for x in 0..image_width as i32 {
+                let y = (x as u32 % image_height) as i32;
+                let (px, py) = frame.map(x, y).unwrap();
+                let (ax, ay) = frame.absolute(x, y).unwrap();
+                assert_eq!(
+                    ax as i64 * width as i64 / 65536 + frame.left as i64,
+                    px as i64
+                );
+                assert_eq!(
+                    ay as i64 * height as i64 / 65536 + frame.top as i64,
+                    py as i64
+                );
+            }
         }
     }
 }

@@ -10,7 +10,9 @@ use url::Url;
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub version: u32,
-    pub provider: String,
+    // Read legacy connection categories without writing them back.
+    #[serde(skip_serializing)]
+    pub provider: Option<String>,
     pub base_url: String,
     pub model: String,
     pub api_key: String,
@@ -25,7 +27,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: 1,
-            provider: "local".into(),
+            provider: None,
             base_url: "http://localhost:11434/v1".into(),
             model: String::new(),
             api_key: String::new(),
@@ -44,9 +46,6 @@ impl Settings {
             return Err("This config.cfg version is not supported.".into());
         }
         api_base(&self.base_url)?;
-        if !["local", "custom"].contains(&self.provider.as_str()) {
-            return Err("Choose Local or Custom connection.".into());
-        }
         if self.model.len() > 512
             || self.api_key.len() > 8192
             || self.api_key.contains(['\r', '\n'])
@@ -79,8 +78,23 @@ impl Settings {
 }
 
 pub fn api_base(value: &str) -> Result<Url, String> {
-    let mut url =
-        Url::parse(value.trim()).map_err(|_| "Enter a complete http:// or https:// server URL.")?;
+    let value = value.trim();
+    let normalized = if value.contains("://") {
+        value.to_owned()
+    } else {
+        let local = value.starts_with("localhost")
+            || value.starts_with("127.")
+            || value.starts_with("[::1]")
+            || value.starts_with("192.168.")
+            || value.starts_with("10.")
+            || value.split('/').next().is_some_and(|host| {
+                host.split(':')
+                    .next()
+                    .is_some_and(|host| host.parse::<std::net::IpAddr>().is_ok())
+            });
+        format!("{}://{value}", if local { "http" } else { "https" })
+    };
+    let mut url = Url::parse(&normalized).map_err(|_| "Enter a valid server address.")?;
     if !["http", "https"].contains(&url.scheme())
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -174,7 +188,10 @@ impl ConfigStore {
             }
         });
         settings.model = settings.model.trim().to_owned();
-        settings.base_url = settings.base_url.trim().trim_end_matches('/').to_owned();
+        settings.base_url = api_base(&settings.base_url)?
+            .as_str()
+            .trim_end_matches('/')
+            .to_owned();
         settings.validate()?;
         // Preserve a damaged file before an explicit replacement from Settings.
         if self.error.is_some() && self.path.exists() {
@@ -227,11 +244,11 @@ fn save_file(path: &Path, settings: &Settings) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn replace(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn replace(from: &Path, to: &Path) -> Result<(), String> {
     fs::rename(from, to).map_err(|_| "config.cfg could not be replaced.".into())
 }
 #[cfg(windows)]
-fn replace(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn replace(from: &Path, to: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -401,9 +418,16 @@ mod tests {
             "file:///etc/passwd",
             "https://a:b@example.org",
             "https://example.org/?key=secret",
-            "localhost:11434",
         ] {
             assert!(api_base(bad).is_err());
         }
+        assert_eq!(
+            api_base("localhost:11434").unwrap().as_str(),
+            "http://localhost:11434/v1/"
+        );
+        assert_eq!(
+            api_base("example.org/proxy/v1").unwrap().as_str(),
+            "https://example.org/proxy/v1/"
+        );
     }
 }

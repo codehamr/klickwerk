@@ -1,73 +1,68 @@
 # Windows 11 acceptance
 
-Use an ordinary, non-elevated Windows account and a disposable desktop with no
-unsaved work. Record Windows build, WebView2 version, monitor scale/layout, selected
-model, and test result. The development container can compile the EXE but cannot
-establish real Windows 11 acceptance or physical hardware latency.
+Use a disposable desktop with an ordinary, non-elevated account. Record Windows
+and WebView2 versions, model, monitor layout/scales, and results. Linux/Wine tests
+do not establish physical hardware or WebView2 acceptance.
 
-## Configuration and startup
+## Startup and connection
 
-- Copy the EXE into a new writable folder. Start it from another working directory.
-  Confirm `config.cfg` is created beside the EXE and nowhere else.
-- Close all development servers and disconnect the network before launch. The
-  interface must still open from the EXE without a `dist` folder, Node.js, or any
-  service on `localhost:1420`. A model connection is only needed for model requests.
-- Save a connection, restart, and confirm exact URL/model/preferences persist.
-  A saved key should have a `dpapi:` value and should not appear in UI snapshots.
-- Make the folder read-only. Confirm a clear error and no hidden fallback config.
-- Put malformed TOML in a test config. Confirm startup preserves it and explicit
-  replacement saving makes a backup.
-- Confirm the original app icon, readable light/dark appearance, keyboard focus,
-  minimum window size, and settings scrolling at 100%, 150%, and 200% scale.
-- Measure cold/warm time to a usable prompt and total process working set. Include
-  the WebView2 child processes. No Windows startup/RAM target has been measured yet.
+- Put the EXE in a writable folder and launch it without a development server or
+  `dist` directory. Its interface must open from embedded assets.
+- Confirm `config.cfg` is created beside the EXE, regardless of working directory.
+- Enter a bare local address, an HTTPS URL, and a proxy API path in the same field.
+  Load models, test the connection, save, and verify settings survive restart.
+- Verify existing configurations with legacy `provider` values still load and
+  that saving removes that unused field. API keys use DPAPI and do not appear in
+  public snapshots; changing server origin clears the old key.
+- Check keyboard focus, settings scrolling, light/dark themes, and 100%, 150%, and
+  200% Windows scaling. Record cold/warm startup times.
 
-## Emergency stop without real task input
+## Input takeover
 
-Settings → Preferences → **Try a safe stop test** starts the actual native broker
-in simulation mode for at most 30 seconds, without screenshots or model requests.
+- Start a disposable task. Confirm the short startup notice remains visible for
+  two seconds and the main window minimizes before capture. No stop bar appears.
+- Move the physical mouse during countdown, model inference, clicking, dragging,
+  and long typing. Repeat with ordinary keys, buttons, and scrolling. Control must
+  end without automatic resumption, and held keys/buttons must be released.
+- Verify the agent's own clicks, Unicode text, and shortcuts do not interrupt it.
+- Test parent termination, UI hangs, minimized-window heartbeats, WebView failure,
+  monitor changes, lock/unlock, and suspend/resume. No late action may arrive after
+  termination. Measure physical takeover latency under normal and heavy load.
 
-- Confirm the stop bar is visible above another focused application and explicitly
-  shows **Ctrl + Alt + F8** and **STOP**. It must not steal keyboard focus.
-- In separate runs, use the chord, click STOP, move the physical mouse, and press
-  an ordinary key. Confirm the run ends and cannot resume automatically.
-- Reserve the chord in another application. Startup must fail with an explanation;
-  no fallback chord should silently replace it.
-- During a test, suspend/terminate the main app. The independent bar should close
-  and stop control after the parent exits or the heartbeat expires.
-- Test minimization, a busy UI thread, a crashed WebView process, monitor changes,
-  locking Windows, suspend/resume, and full-screen windows. Record visibility and
-  stop timing; exclusive full-screen and secure desktop are not guaranteed overlays.
-
-The optional native fixture binary is built separately and is not distributed:
+The isolated native fixture is available with:
 
 ```powershell
-cargo build --release --manifest-path src-tauri/Cargo.toml --features safety-tests,tauri/custom-protocol --bin klickwerk-safety-tests
-.\src-tauri\target\release\klickwerk-safety-tests.exe
+npm run test:native -- --with-disposable-input
 ```
 
-It checks real hotkey registration, native window properties, countdown
-cancellation, premature input refusal, heartbeat/pipe loss, and the stop chord with
-focus in a disposable fixture window. Only the balanced stop chord is injected.
-Use `--with-disposable-input` **only on an isolated test desktop** to additionally
-exercise a local fixture provider, capture, validated click, Unicode input,
-Ctrl+A/replacement, and STOP during typing in a fixture-owned unsaved editor.
+It uses a loopback scripted provider and an unsaved fixture-owned editor. It checks
+hidden monitoring, tagged versus external input, countdown cancellation, premature
+input refusal, heartbeat/pipe loss, capture, clicks, multilingual/multiline typing,
+Ctrl+A, and interruption during text. External input is simulated for this fixture;
+physical hardware still needs the manual checks above.
 
-## Disposable real task
+## Coordinates and learning
 
-1. Start a compatible vision model server. Use **Test connection**; this is a
-   generated-image test and does not establish task accuracy.
-2. Open an empty text editor. Ask klickwerk to write a short multilingual greeting
-   and leave it open for review. Check coordinates, exact text, completion, and STOP.
-3. Repeat with a slow model response and stop before it completes. Confirm no late
-   action arrives. Check physical takeover during typing and dragging and ensure
-   no key or mouse button remains held.
-4. Exercise a question and Continue. The bar must close while waiting for the user
-   and return with a fresh countdown for the reply.
-5. Check refusal to target the app, the stop bar, monitor gaps, elevated windows,
-   and changed screen targets. Repeat with mixed-DPI and negative-origin monitors.
-6. Validate SAPI dictation using the configured Windows speech language, microphone
-   permission denial, cancellation, device removal, and offline operation.
-
-Do not claim reliable live-model operation, physical stop latency, or full Windows
-acceptance from a successful build, browser preview, scripted model, or Wine run.
+1. Ask for a multilingual note in an empty editor. Check exact Unicode text, line
+   breaks, normal shortcuts, Windows shortcuts, and completion.
+2. Repeat with negative-origin monitors and mixed display scales. Compare the
+   visible action history's screenshot and physical click coordinates with the
+   actual targets. Test moving targets during slow model responses.
+3. Take over after an incorrect action. Enter a refinement and continue. Verify
+   the old actions and correction remain visible and reach the next model request.
+   Ensure partial actions are not presented as verified success.
+4. Trigger a question, answer it, and verify the new countdown retains context.
+5. After stopping, type a correction and choose Save as workflow without first
+   continuing. Verify the model includes that unsent correction in its proposed
+   start prompt and memory. Cancel preparation and test server failure/retry.
+6. Edit the name, prompt, and internal instructions, then save. Restart the app,
+   reopen the workflow, inspect its history, and edit/save the prompt again.
+7. Use that workflow in a fresh instance with windows in different positions.
+   Verify learned target descriptions are adapted to the new screenshot. Refine
+   and save again; old and new corrections must remain in the same workflow.
+8. Begin another task. No card from the previously completed task should remain.
+9. Verify read-only folders and damaged workflow/config files produce useful
+   errors without overwriting existing data. Delete a saved test workflow and
+   confirm it stays removed after restart.
+10. Test SAPI dictation for both tasks and refinements, including permission denial,
+    cancellation, device removal, and the configured Windows speech language.

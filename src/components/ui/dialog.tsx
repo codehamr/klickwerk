@@ -13,11 +13,13 @@ export function DialogContent({
   title,
   description,
   onCloseAutoFocus,
+  closeLabel = "Close dialog",
 }: {
   children: ReactNode;
   title: string;
   description: string;
   onCloseAutoFocus?: (event: Event) => void;
+  closeLabel?: string;
 }) {
   return (
     <Primitive.Portal>
@@ -33,7 +35,7 @@ export function DialogContent({
           </div>
           <Primitive.Close
             className="button button-ghost button-icon"
-            aria-label="Close settings"
+            aria-label={closeLabel}
           >
             <X size={19} />
           </Primitive.Close>
