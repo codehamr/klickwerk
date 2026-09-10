@@ -123,9 +123,22 @@ remains interruptible, and visible completion still needs model verification.
 
 Rebuild the devcontainer after this migration. It contains Node 24, Rust 1.98.1,
 LLVM, and cargo-xwin. It does not need a Linux desktop, GTK/WebKit development
-packages, Wine, noVNC, MinGW, or a Python application runtime. Existing coding-agent
-credential volumes are retained. Dependencies and compiler caches use Linux volumes
-to avoid Windows bind-mount file-lock and performance problems.
+packages, Wine, noVNC, MinGW, or a Python application runtime. Dependencies and
+compiler caches use Linux volumes to avoid Windows bind-mount file-lock and
+performance problems.
+
+Claude Code, Codex, and Codehamr are installed natively in the image. Private volumes
+scoped by `${devcontainerId}` persist `/root/.claude`, `/root/.codex`, `/root/.agents`,
+and `/root/.config/anthropic` across rebuilds. Each new environment needs a separate
+sign-in; logins are never copied between containers. The old `klickwerk-claude` and
+`klickwerk-codex` volumes remain untouched but are no longer mounted.
+Codehamr keeps configuration and prompt history in the workspace's ignored
+`.codehamr/` directory; keep credentials out of Git and the image.
+
+Codex configuration is managed personally in `/root/.codex/config.toml` in the
+private volume. The image does not supply a configuration template. Agent
+executables and their symlink targets live outside the data volumes, with Codex's
+package under `/opt/codex`.
 
 ```sh
 npm ci

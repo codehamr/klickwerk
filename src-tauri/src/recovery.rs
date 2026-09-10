@@ -6,11 +6,17 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
+    net::TcpStream,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
+
+#[cfg(any(test, feature = "safety-tests"))]
+#[path = "recovery_fixture.rs"]
+pub mod fixture;
 
 pub const RESTART_READY: &str = "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.";
 pub const RESTART_FAILED: &str = "The administrator restart failed. Your session is still open. You can retry or export its history.";
@@ -23,6 +29,25 @@ pub const RESUME_CANCELLED: &str = "Automatic continuation was cancelled. Your t
 pub const AUTO_SOURCE: &str = "controller_privilege_recovery";
 const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 const TRANSFER_VERSION: u32 = 2;
+const MAX_REJECTION: usize = 4096;
+
+fn transfer_failure(code: &str) -> InputFailure {
+    InputFailure::new(code, RESTART_FAILED)
+}
+
+pub(crate) fn io_failure(code: &str, error: std::io::Error) -> InputFailure {
+    InputFailure::io(code, RESTART_FAILED, error)
+}
+
+pub fn configure_transfer_stream(stream: &TcpStream) -> Result<(), InputFailure> {
+    // Winsock accept inherits the listener's nonblocking mode. Timeouts alone
+    // do not make read_exact/write_all wait for fragmented data or the child ACK.
+    stream
+        .set_nonblocking(false)
+        .and_then(|_| stream.set_read_timeout(Some(Duration::from_secs(10))))
+        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
+        .map_err(|error| io_failure("restart_socket_failed", error))
+}
 
 // This is a one-time, memory-only transfer, not a saved workflow or a model action.
 #[derive(Serialize, Deserialize)]
@@ -51,12 +76,15 @@ impl RestartSession {
         })
     }
 
-    pub fn restore(mut self, sender: u32) -> Result<Self, String> {
-        if self.version != TRANSFER_VERSION
-            || !is_recoverable_block(&self.run)
-            || !(0x3000..0x4000).contains(&sender)
-        {
-            return Err(RESTART_FAILED.into());
+    pub fn restore(mut self, sender: u32) -> Result<Self, InputFailure> {
+        if self.version != TRANSFER_VERSION {
+            return Err(transfer_failure("restart_version_mismatch"));
+        }
+        if !is_recoverable_block(&self.run) {
+            return Err(transfer_failure("restart_session_invalid"));
+        }
+        if !(0x3000..0x4000).contains(&sender) {
+            return Err(transfer_failure("restart_integrity_invalid"));
         }
         self.run.evidence = Arc::new(std::mem::take(&mut self.evidence));
         self.run.phase = if self.resume_after_approval {
@@ -145,27 +173,38 @@ fn is_recoverable_block(run: &RunView) -> bool {
         && run.steps.len() < crate::workflow::MAX_STEPS - 3
 }
 
-pub fn write_transfer(writer: &mut impl Write, session: &RestartSession) -> Result<(), String> {
-    let bytes = serde_json::to_vec(session).map_err(|_| RESTART_FAILED)?;
+pub fn write_transfer(
+    writer: &mut impl Write,
+    session: &RestartSession,
+) -> Result<(), InputFailure> {
+    let bytes = serde_json::to_vec(session)
+        .map_err(|error| InputFailure::json("restart_encode_failed", RESTART_FAILED, error))?;
     if bytes.len() > MAX_TRANSFER {
-        return Err(RESTART_FAILED.into());
+        return Err(transfer_failure("restart_transfer_too_large"));
     }
     writer
         .write_all(&(bytes.len() as u32).to_le_bytes())
-        .and_then(|_| writer.write_all(&bytes))
-        .map_err(|_| RESTART_FAILED.into())
+        .map_err(|error| io_failure("restart_header_write_failed", error))?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| io_failure("restart_transfer_write_failed", error))
 }
 
-pub fn read_transfer(reader: &mut impl Read) -> Result<RestartSession, String> {
+pub fn read_transfer(reader: &mut impl Read) -> Result<RestartSession, InputFailure> {
     let mut size = [0u8; 4];
-    reader.read_exact(&mut size).map_err(|_| RESTART_FAILED)?;
+    reader
+        .read_exact(&mut size)
+        .map_err(|error| io_failure("restart_header_read_failed", error))?;
     let size = u32::from_le_bytes(size) as usize;
     if size > MAX_TRANSFER {
-        return Err(RESTART_FAILED.into());
+        return Err(transfer_failure("restart_transfer_too_large"));
     }
     let mut bytes = vec![0; size];
-    reader.read_exact(&mut bytes).map_err(|_| RESTART_FAILED)?;
-    serde_json::from_slice(&bytes).map_err(|_| RESTART_FAILED.into())
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| io_failure("restart_transfer_read_failed", error))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| InputFailure::json("restart_decode_failed", RESTART_FAILED, error))
 }
 
 // Receipt alone never authorizes continuation. Stop can cancel even while the
@@ -173,40 +212,79 @@ pub fn read_transfer(reader: &mut impl Read) -> Result<RestartSession, String> {
 pub fn prepare_transfer(
     stream: &mut (impl Read + Write),
     session: &RestartSession,
-) -> Result<(), &'static str> {
-    write_transfer(stream, session).map_err(|_| "restart_transfer_write_failed")?;
+) -> Result<(), InputFailure> {
+    write_transfer(stream, session)?;
     let mut ack = [0u8; 1];
     stream
         .read_exact(&mut ack)
-        .map_err(|_| "restart_ack_failed")?;
-    if ack != [1] {
-        return Err("restart_ack_failed");
+        .map_err(|error| io_failure("restart_ack_failed", error))?;
+    match ack[0] {
+        1 => Ok(()),
+        // Older peers still understand the success byte. A rejection is bounded
+        // and can never be confused with receipt or authorization to continue.
+        2 => {
+            let mut size = [0u8; 4];
+            stream
+                .read_exact(&mut size)
+                .map_err(|error| io_failure("restart_rejection_read_failed", error))?;
+            let size = u32::from_le_bytes(size) as usize;
+            if size > MAX_REJECTION {
+                return Err(transfer_failure("restart_rejection_too_large"));
+            }
+            let mut bytes = vec![0; size];
+            stream
+                .read_exact(&mut bytes)
+                .map_err(|error| io_failure("restart_rejection_read_failed", error))?;
+            let failure: InputFailure = serde_json::from_slice(&bytes).map_err(|error| {
+                InputFailure::json("restart_rejection_invalid", RESTART_FAILED, error)
+            })?;
+            Err(failure)
+        }
+        _ => Err(transfer_failure("restart_ack_invalid")),
     }
-    Ok(())
 }
 
-pub fn commit_transfer(stream: &mut impl Write, cancel: &AtomicBool) -> Result<(), &'static str> {
+pub fn commit_transfer(stream: &mut impl Write, cancel: &AtomicBool) -> Result<(), InputFailure> {
     let proceed = !cancel.load(Ordering::SeqCst);
     stream
         .write_all(&[u8::from(proceed)])
-        .map_err(|_| "restart_commit_failed")?;
+        .map_err(|error| io_failure("restart_commit_failed", error))?;
     if proceed {
         Ok(())
     } else {
-        Err("restart_cancelled")
+        Err(InputFailure::new("restart_cancelled", RESUME_CANCELLED))
     }
 }
 
 pub fn receive_committed_transfer(
     stream: &mut (impl Read + Write),
     integrity: u32,
-) -> Result<RestartSession, String> {
-    let session = read_transfer(stream)?.restore(integrity)?;
-    stream.write_all(&[1]).map_err(|_| RESTART_FAILED)?;
+) -> Result<RestartSession, InputFailure> {
+    let session = match read_transfer(stream).and_then(|session| session.restore(integrity)) {
+        Ok(session) => session,
+        Err(failure) => {
+            // Tell the original instance why restoration failed before exiting.
+            // It owns the export and must remain open with the full error context.
+            if let Ok(bytes) = serde_json::to_vec(&failure)
+                && bytes.len() <= MAX_REJECTION
+            {
+                let _ = stream
+                    .write_all(&[2])
+                    .and_then(|_| stream.write_all(&(bytes.len() as u32).to_le_bytes()))
+                    .and_then(|_| stream.write_all(&bytes));
+            }
+            return Err(failure);
+        }
+    };
+    stream
+        .write_all(&[1])
+        .map_err(|error| io_failure("restart_ack_write_failed", error))?;
     let mut commit = [0u8; 1];
-    stream.read_exact(&mut commit).map_err(|_| RESTART_FAILED)?;
+    stream
+        .read_exact(&mut commit)
+        .map_err(|error| io_failure("restart_commit_read_failed", error))?;
     if commit != [1] {
-        return Err(RESUME_CANCELLED.into());
+        return Err(InputFailure::new("restart_cancelled", RESUME_CANCELLED));
     }
     Ok(session)
 }
@@ -218,6 +296,24 @@ mod tests {
         config::Settings,
         diagnostics::{TargetInfo, WindowInfo},
     };
+
+    struct Duplex {
+        input: std::io::Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+    impl Read for Duplex {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(bytes)
+        }
+    }
+    impl Write for Duplex {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.output.write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn blocked() -> RunView {
         RunView {
@@ -369,7 +465,7 @@ mod tests {
             });
             let restored = child.join().unwrap();
             if cancellation_stage != "none" {
-                assert_eq!(result, Err("restart_cancelled"));
+                assert_eq!(result.unwrap_err().code, "restart_cancelled");
                 assert!(restored.is_none());
             } else {
                 assert!(result.is_ok());
@@ -382,23 +478,6 @@ mod tests {
 
     #[test]
     fn child_cannot_continue_from_an_uncommitted_or_cancelled_transfer() {
-        struct Duplex {
-            input: std::io::Cursor<Vec<u8>>,
-            output: Vec<u8>,
-        }
-        impl Read for Duplex {
-            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-                self.input.read(bytes)
-            }
-        }
-        impl Write for Duplex {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.output.write(bytes)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         let session = automatic_session(&mut blocked(), String::new(), false).unwrap();
         for commit in [None, Some(0), Some(2)] {
             let mut wire = Vec::new();
@@ -544,5 +623,96 @@ mod tests {
         assert!(read_transfer(&mut ((MAX_TRANSFER + 1) as u32).to_le_bytes().as_slice()).is_err());
         assert!(read_transfer(&mut [10, 0, 0, 0, 123].as_slice()).is_err());
         assert!(read_transfer(&mut [2, 0, 0, 0, 123, 125].as_slice()).is_err());
+    }
+
+    #[test]
+    fn child_decode_rejection_reaches_the_export_without_echoing_private_values() {
+        let session = fixture::session();
+        let mut value = serde_json::to_value(&session).unwrap();
+        value["run"]["steps"][0]["action"]["type"] = "private-invalid-action-value".into();
+        let payload = serde_json::to_vec(&value).unwrap();
+        let mut input = (payload.len() as u32).to_le_bytes().to_vec();
+        input.extend(payload);
+        let mut child = Duplex {
+            input: std::io::Cursor::new(input),
+            output: vec![],
+        };
+        assert!(
+            matches!(receive_committed_transfer(&mut child, 12288), Err(failure) if failure.code == "restart_decode_failed")
+        );
+        assert_eq!(child.output[0], 2);
+        assert!(child.output.len() <= MAX_REJECTION + 5);
+        let mut parent = Duplex {
+            input: std::io::Cursor::new(child.output),
+            output: vec![],
+        };
+        let failure = prepare_transfer(&mut parent, &session).unwrap_err();
+        assert_eq!(failure.code, "restart_decode_failed");
+        let location = failure.json_error.as_ref().unwrap();
+        assert_eq!(location.category, "Data");
+        assert!(location.line > 0 && location.column > 0);
+        let mut run = session.run;
+        run.recovery_event("elevation_failed", AUTO_SOURCE, Some(8192), Some(failure));
+        let export = crate::session::SessionExport::new(run, 3, None, String::new(), None).unwrap();
+        let json = serde_json::to_string(&export).unwrap();
+        assert!(json.contains("restart_decode_failed"));
+        assert!(json.contains("json_error"));
+        assert!(!json.contains("private-invalid-action-value"));
+    }
+
+    #[test]
+    fn receipt_errors_preserve_io_kind_and_windows_error_for_feedback() {
+        struct MissingReceipt;
+        impl Read for MissingReceipt {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                #[cfg(windows)]
+                return Err(std::io::Error::from_raw_os_error(10035));
+                #[cfg(not(windows))]
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+        }
+        impl Write for MissingReceipt {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let failure = prepare_transfer(&mut MissingReceipt, &fixture::session()).unwrap_err();
+        assert_eq!(failure.code, "restart_ack_failed");
+        assert_eq!(failure.io_error_kind.as_deref(), Some("WouldBlock"));
+        #[cfg(windows)]
+        assert_eq!(failure.win32_error, Some(10035));
+        let encoded = serde_json::to_value(&failure).unwrap();
+        assert_eq!(encoded["io_error_kind"], "WouldBlock");
+        // Previous exports have no additional fields and must remain readable.
+        let old = serde_json::json!({"code": "restart_ack_failed", "message": RESTART_FAILED,
+            "target": null, "win32_error": null});
+        let old: InputFailure = serde_json::from_value(old).unwrap();
+        assert!(old.io_error_kind.is_none() && old.json_error.is_none());
+    }
+
+    #[test]
+    fn invalid_or_truncated_rejections_cannot_acknowledge_a_transfer() {
+        let session = fixture::session();
+        let mut oversized = vec![2];
+        oversized.extend(((MAX_REJECTION + 1) as u32).to_le_bytes());
+        for (input, code) in [
+            (vec![], "restart_ack_failed"),
+            (vec![0], "restart_ack_invalid"),
+            (vec![2, 1], "restart_rejection_read_failed"),
+            (oversized, "restart_rejection_too_large"),
+            (vec![2, 1, 0, 0, 0, b'{'], "restart_rejection_invalid"),
+        ] {
+            let mut stream = Duplex {
+                input: std::io::Cursor::new(input),
+                output: vec![],
+            };
+            assert_eq!(
+                prepare_transfer(&mut stream, &session).unwrap_err().code,
+                code
+            );
+        }
     }
 }

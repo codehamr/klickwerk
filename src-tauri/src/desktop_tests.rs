@@ -217,6 +217,7 @@ async fn suite() -> Result<(), String> {
 }
 
 pub fn run() -> i32 {
+    crate::recovery::fixture::checks();
     unsafe {
         windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
             windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -500,4 +501,41 @@ async fn input_suite() -> Result<(), String> {
     let _ = editor.kill();
     let _ = editor.wait();
     result
+}
+
+// Offline reproduction reads a caller-selected export but never starts control,
+// launches the target app, requests consent or writes to the original export.
+pub fn recovery_replay_if_requested() -> bool {
+    if std::env::args().nth(1).as_deref() != Some("--recovery-replay") {
+        return false;
+    }
+    let path = std::env::args().nth(2).expect("Provide the export path");
+    let file = std::fs::File::open(path).expect("Read export");
+    assert!(
+        file.metadata().expect("Inspect export").len() <= 64 * 1024 * 1024,
+        "The replay export exceeds 64 MiB"
+    );
+    let export: serde_json::Value = serde_json::from_reader(file).expect("Decode export");
+    let mut run: RunView = serde_json::from_value(export["run"].clone()).expect("Decode run");
+    run.evidence = Arc::new(
+        serde_json::from_value::<crate::session::Evidence>(export["evidence"].clone())
+            .expect("Decode evidence"),
+    );
+    // Reproduce the first recovery request from this paused session, not its retries.
+    run.recovery_events
+        .retain(|event| event.kind == "privilege_blocked");
+    let memory = export["warm_start_prompt"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let session =
+        crate::recovery::automatic_session(&mut run, memory, false).expect("Create restart");
+    let outcome = crate::recovery::fixture::round_trip(&session, 12288, false);
+    outcome.parent.expect("Transfer and commit session");
+    crate::recovery::fixture::check_restored(&session, &outcome.child.expect("Restore session"));
+    println!(
+        "PASS exported session survives native TCP transfer with delayed receipt ({} ms)",
+        outcome.elapsed_ms
+    );
+    true
 }

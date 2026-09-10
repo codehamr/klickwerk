@@ -1,6 +1,9 @@
 fn main() {
     #[cfg(windows)]
     {
+        if klickwerk_core::desktop::safety_tests::recovery_replay_if_requested() {
+            return;
+        }
         if klickwerk_core::platform::broker::run_if_requested() {
             return;
         }

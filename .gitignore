@@ -23,12 +23,12 @@ workflows.json
 !.env.example
 .claude/
 .codex/
+.codehamr/
 *.pem
 *.key
 
 # Local scratch / runtime data
 /data/
 tmp.md
-.codehamr/history/
 .DS_Store
 Thumbs.db

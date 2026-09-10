@@ -236,6 +236,21 @@ with Stop. Cancellation before this commit aborts the transfer, so closing the
 original window later cannot accidentally authorize the child. Failed acknowledgements,
 missing commits and cancelled transfers leave control disarmed.
 
+The listener polls nonblocking while waiting for the child, but every accepted
+stream is explicitly reset to blocking mode before authentication or session I/O.
+[Winsock `accept`](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept)
+inherits listener properties; setting timeouts alone does not clear nonblocking
+mode. Read/write timeouts remain ten seconds. A delayed or fragmented receipt must
+wait for data rather than fail immediately with `WSAEWOULDBLOCK` (10035).
+
+The success receipt remains byte `1`. A child that cannot decode or restore the
+session sends byte `2` followed by a length-prefixed diagnostic of at most 4 KiB.
+The parent retains that failure in its export and never commits a rejected
+transfer. Failure diagnostics preserve stage, I/O kind, Windows error number and
+JSON error category/location without copying parser messages or payload values.
+The native fixture exercises this same transport with a nonblocking listener,
+fragmented authentication, short reads, delayed receipt, cancellation and timeout.
+
 The automatic restart restores phase `recovering` and a one-use pending run ID.
 Once the UI is mounted and has sent a heartbeat, `resume_after_restart` consumes
 that ID under the activity lock and resumes the original task. It creates a new

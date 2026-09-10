@@ -178,3 +178,50 @@ during receipt and missing/invalid commits. Browser tests exercise UI readiness,
 duplicate notifications, both languages and Stop during pending continuation.
 These fixtures do not establish real Windows UAC/WebView2 or live-model Task Manager
 completion; follow the target-PC acceptance steps.
+
+## Restart transport regression
+
+The next export (`started_at: 1789053976585`, controller revision
+`2026-09-consent-and-resume-v3`) shows Task Manager at High integrity (12288) and
+klickwerk at Medium integrity (8192). The automatic request now happens, but fails
+214 ms later with `restart_ack_failed`. A manual retry fails at the same stage
+after 174 ms. Neither `elevation_restored` nor `automatic_resume_started` appears,
+and no filter entry is attempted. This is a transfer failure before continuation.
+
+The exported session successfully decoded on both Linux and the Windows fixture's
+main thread. A native socket probe under Wine reproduced a concrete transport bug:
+accepting from the nonblocking listener and setting read/write timeouts still left
+the accepted socket nonblocking. Reading the delayed receipt returned Windows error
+10035 (`WouldBlock`) after 10 ms. Resetting that same socket to blocking mode allowed
+the pending receipt to arrive at 251 ms. This matches the
+[Winsock inheritance contract](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept).
+The original export discarded the OS error, so it cannot independently prove that
+10035 was the exact error on the user's PC.
+
+Revision `2026-09-restart-transport-v4` explicitly resets the stream mode before
+authentication and transfer. It preserves the final cancellation commit and the
+UI-ready continuation gate. Socket I/O failures now retain `io_error_kind` and
+`win32_error`; JSON failures retain `json_error.category`, `line` and `column`.
+These optional fields keep older exports readable. Stage codes distinguish header
+and payload reads/writes, authentication reads, receipt, rejection decoding and
+commit. A bounded negative receipt also reports child restoration failures such
+as `restart_decode_failed`, `restart_version_mismatch`, `restart_session_invalid`
+and `restart_integrity_invalid` to the original instance's recovery history.
+No parser message, authentication token or credential is added to diagnostics.
+
+The standard native suite now includes restart transport checks, closing a gap
+in the previous validation: its portable loopback test used a blocking listener,
+and the native tests exercised desktop input but not restart sockets. An optional
+offline replay can use a caller-selected feedback export through the actual
+transfer functions. It verifies task, actions, attempts, evidence and memory
+retention, without launching Task Manager, sending input or requesting elevation:
+
+```sh
+npm run test:native -- --with-disposable-input --replay-export build/debug.json
+```
+
+The replay models the first recovery request and preserves the source file. It
+accepts paused, recoverable privilege-block exports up to 64 MiB; actual transfers
+retain their 32 MiB limit. The fixture supplies the child integrity value, so real
+Windows consent, process replacement, WebView2 startup and live-model completion
+still require target-PC acceptance.

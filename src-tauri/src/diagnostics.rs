@@ -40,11 +40,22 @@ pub fn input_block(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JsonFailure {
+    pub category: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputFailure {
     pub code: String,
     pub message: String,
     pub target: Option<Box<TargetInfo>>,
     pub win32_error: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub io_error_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_error: Option<Box<JsonFailure>>,
 }
 impl InputFailure {
     pub fn new(code: &str, message: &str) -> Self {
@@ -53,7 +64,32 @@ impl InputFailure {
             message: message.into(),
             target: None,
             win32_error: None,
+            io_error_kind: None,
+            json_error: None,
         }
+    }
+
+    pub fn io(code: &str, message: &str, error: std::io::Error) -> Self {
+        let mut failure = Self::new(code, message);
+        failure.io_error_kind = Some(format!("{:?}", error.kind()));
+        #[cfg(windows)]
+        {
+            failure.win32_error = error
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok());
+        }
+        failure
+    }
+
+    pub fn json(code: &str, message: &str, error: serde_json::Error) -> Self {
+        let mut failure = Self::new(code, message);
+        // Keep location/category, not messages that can echo private payload values.
+        failure.json_error = Some(Box::new(JsonFailure {
+            category: format!("{:?}", error.classify()),
+            line: error.line(),
+            column: error.column(),
+        }));
+        failure
     }
     pub fn can_restart_elevated(&self) -> bool {
         self.code == "higher_integrity" && self.target.as_ref().is_some_and(|target| {
@@ -83,6 +119,8 @@ impl InputFailure {
             message: message.into(),
             win32_error: target.window.inspection_error,
             target: Some(Box::new(target)),
+            io_error_kind: None,
+            json_error: None,
         }
     }
 }

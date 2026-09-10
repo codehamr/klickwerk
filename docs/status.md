@@ -1,6 +1,30 @@
 # Validation status — 2026-09-10
 
-## Current consent recovery follow-up
+## Current restart transport follow-up
+
+Revision `2026-09-restart-transport-v4` fixes the accepted restart socket inheriting
+nonblocking mode on Windows. The latest export records two `restart_ack_failed`
+failures before any filter input. A native probe reproduced error 10035 within
+10 ms; resetting that same socket to blocking mode received the delayed ACK at
+251 ms. Both restart paths now use the corrected stream setup. Errors preserve
+I/O kind, Windows code and bounded child decode/restore diagnostics in the export.
+
+Validation: 46 portable Rust tests, all 36 Chromium tests, TypeScript/ESLint and
+Windows-target Clippy with warnings denied pass. The Wine/Xvfb native suite passes
+5 restart transport checks, 13 input monitoring checks and 17 disposable editor
+checks. The original `build/debug.json` also passes an offline transfer replay
+through the production protocol in the Windows fixture (301 ms), retaining the
+task, actual actions, attempts, screenshots and saved instructions.
+
+The release artifact is `build/klickwerk.exe`; its identity and validation are
+recorded in `build/validation/restart-transport-release.json`. The standard native
+suite now covers restart sockets, which the earlier validation omitted. The replay
+supplies the expected child integrity and does not launch UAC or a WebView. Actual
+Windows 11 process replacement and live-model Task Manager filter/sort/result
+completion remain target-PC acceptance checks. See the
+[export diagnosis](session-export.md#restart-transport-regression).
+
+## Earlier consent recovery follow-up
 
 Revision `2026-09-consent-and-resume-v3` fixes the latest exported Task Manager
 run stopping at a confirmed Medium-to-High integrity conflict without requesting

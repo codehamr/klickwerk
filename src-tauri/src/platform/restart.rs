@@ -25,28 +25,11 @@ fn failure(code: &str, message: &str, win32_error: Option<u32>) -> InputFailure 
 fn transfer_failure(code: &str) -> InputFailure {
     failure(code, recovery::RESTART_FAILED, None)
 }
-fn configure(stream: &TcpStream) -> Result<(), String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
-        .map_err(|_| recovery::RESTART_FAILED.into())
-}
-
 pub struct PreparedRestart(TcpStream);
 impl PreparedRestart {
     // Called under the same activity lock as Stop, just before requesting exit.
     pub fn commit(mut self, cancel: &AtomicBool) -> Result<(), InputFailure> {
-        recovery::commit_transfer(&mut self.0, cancel).map_err(|code| {
-            failure(
-                code,
-                if code == "restart_cancelled" {
-                    recovery::RESUME_CANCELLED
-                } else {
-                    recovery::RESTART_FAILED
-                },
-                None,
-            )
-        })
+        recovery::commit_transfer(&mut self.0, cancel)
     }
 }
 
@@ -65,10 +48,10 @@ pub fn launch(
         ));
     }
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .map_err(|_| transfer_failure("restart_listener_failed"))?;
+        .map_err(|error| recovery::io_failure("restart_listener_failed", error))?;
     listener
         .set_nonblocking(true)
-        .map_err(|_| transfer_failure("restart_listener_failed"))?;
+        .map_err(|error| recovery::io_failure("restart_listener_failed", error))?;
     let mut random = [0u8; 32];
     if unsafe {
         BCryptGenRandom(
@@ -84,9 +67,10 @@ pub fn launch(
     let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
     let port = listener
         .local_addr()
-        .map_err(|_| transfer_failure("restart_listener_failed"))?
+        .map_err(|error| recovery::io_failure("restart_listener_failed", error))?
         .port();
-    let exe = std::env::current_exe().map_err(|_| transfer_failure("restart_executable_failed"))?;
+    let exe = std::env::current_exe()
+        .map_err(|error| recovery::io_failure("restart_executable_failed", error))?;
     let file: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
     let directory: Vec<u16> = exe
         .parent()
@@ -156,9 +140,12 @@ pub fn launch(
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                configure(&stream).map_err(|_| transfer_failure("restart_socket_failed"))?;
+                recovery::configure_transfer_stream(&stream)?;
                 let mut received = [0u8; 64];
-                if stream.read_exact(&mut received).is_err() || received != token.as_bytes() {
+                stream
+                    .read_exact(&mut received)
+                    .map_err(|error| recovery::io_failure("restart_auth_read_failed", error))?;
+                if received != token.as_bytes() {
                     return Err(transfer_failure("restart_auth_failed"));
                 }
                 if cancel.load(Ordering::SeqCst) {
@@ -168,13 +155,13 @@ pub fn launch(
                         None,
                     ));
                 }
-                recovery::prepare_transfer(&mut stream, &session).map_err(transfer_failure)?;
+                recovery::prepare_transfer(&mut stream, &session)?;
                 return Ok(PreparedRestart(stream));
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(50))
             }
-            Err(_) => return Err(transfer_failure("restart_accept_failed")),
+            Err(error) => return Err(recovery::io_failure("restart_accept_failed", error)),
         }
     }
 }
@@ -202,11 +189,12 @@ pub fn receive_if_requested() -> Result<Option<RestartSession>, String> {
     let mut stream =
         TcpStream::connect_timeout(&(Ipv4Addr::LOCALHOST, port).into(), Duration::from_secs(5))
             .map_err(|_| recovery::RESTART_FAILED)?;
-    configure(&stream)?;
+    recovery::configure_transfer_stream(&stream).map_err(|failure| failure.message)?;
     stream
         .write_all(args[4].as_bytes())
         .map_err(|_| recovery::RESTART_FAILED)?;
-    let mut session = recovery::receive_committed_transfer(&mut stream, integrity)?;
+    let mut session = recovery::receive_committed_transfer(&mut stream, integrity)
+        .map_err(|failure| failure.message)?;
     // The old instance exits only after our acknowledgement. Wait before acquiring
     // its single-instance mutex; never run two controllers or race config writes.
     if unsafe { WaitForSingleObject(parent.0, 10000) } != WAIT_OBJECT_0 {

@@ -87,6 +87,8 @@ export interface InputFailure {
     input_block: string | null;
   } | null;
   win32_error: number | null;
+  io_error_kind?: string;
+  json_error?: { category: string; line: number; column: number };
 }
 export interface RecoveryEvent {
   recorded_at: number;

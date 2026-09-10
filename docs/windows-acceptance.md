@@ -52,6 +52,18 @@ input refusal, heartbeat/pipe loss, capture, clicks, multilingual/multiline typi
 Ctrl+A, and interruption during text. External input is simulated for this fixture;
 physical hardware still needs the manual checks above.
 
+The fixture also checks the production restart protocol with an accepted socket
+from a nonblocking listener, fragmented authentication, delayed receipt, a large
+session, Stop during receipt, child rejection and bounded timeouts. To reproduce
+a paused privilege-block report through the transfer functions, add:
+
+```powershell
+npm run test:native -- --with-disposable-input --replay-export build/debug.json
+```
+
+This optional replay reads the export, checks preservation and leaves the source
+unchanged. Its transport simulation does not request UAC or operate the target app.
+
 ## Coordinates and learning
 
 1. Ask for a multilingual note in an empty editor. Check exact Unicode text, line
@@ -141,6 +153,11 @@ physical hardware still needs the manual checks above.
   transfer failure stage, restoration, parent exit and `automatic_resume_started`.
   Earlier attempt outcomes and evidence must remain. A failed transfer keeps the
   original app open. Test actual UAC on Windows 11; Wine does not validate consent UI.
+- Test a slow administrator restart with a large screenshot history. A delayed
+  receipt must not cause an immediate `restart_ack_failed`/10035 failure. For any
+  actual failure, inspect `io_error_kind`, `win32_error` and optional
+  `json_error.category`/`line`/`column` in the exported recovery event. Child decode
+  and version failures must reach the original instance without a commit.
 - Export after a refusal and after refinement. Inspect rejection codes, both
   integrity levels, window title/class/bounds, frame references, model and input
   timing, and handoff verification. Decode a `jpeg_base64` entry as a JPEG.
