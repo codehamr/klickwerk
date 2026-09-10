@@ -50,12 +50,17 @@ EXE is not an installer and does not silently download a runtime. Move the app o
 of `Program Files` or another read-only folder if settings cannot be saved.
 
 When a target such as Task Manager runs as administrator, Windows can block input
-from a normally launched klickwerk. Choose **Restart as administrator** in the
-paused task, approve the Windows UAC prompt, then click **Continue**. Task history,
-recent diagnostic evidence and unsent refinement text survive this explicit restart.
-Cancelling UAC keeps the original session open. Input resumes only after Continue;
-settings and security policies are not changed. Use the same Windows account so
-DPAPI-protected connection credentials remain readable.
+from a normally launched klickwerk. For a confirmed, recoverable permission block,
+klickwerk opens the normal Windows UAC prompt once. Approve it to restart klickwerk
+and continue the original task automatically from a fresh desktop observation.
+The task, history and recent diagnostic evidence are kept. Declining UAC leaves
+the original session paused, with manual retry and export available; it does not
+repeat the permission prompt. **Stop** cancels pending continuation.
+
+For a later manual retry, choose **Restart as administrator**, approve Windows,
+then choose **Continue** in the restored session. Unsent refinement text survives
+that explicit restart too. Settings and security policies are not changed. Use
+the same Windows account so DPAPI-protected connection credentials remain readable.
 
 The microphone uses the Windows default SAPI recognizer and default audio input.
 An installed speech language and microphone permission are required. Typed prompts

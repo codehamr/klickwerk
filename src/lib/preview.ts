@@ -133,6 +133,8 @@ export async function previewCall<T>(
       emit();
       return structuredClone(state) as T;
     }
+    case "resume_after_restart":
+      return undefined as T;
     case "restart_as_administrator":
       throw new Error("Administrator restart is available in the Windows app.");
     case "list_models":

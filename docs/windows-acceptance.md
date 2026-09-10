@@ -119,25 +119,28 @@ physical hardware still needs the manual checks above.
 - Reproduce the Task Manager task: Ctrl+Shift+Escape, filter `chr`, sort Memory
   descending, identify the first matching row and its displayed value. Check the
   foreground metadata, search result, sort indicator and image/desktop mapping.
-- Test a target at higher integrity than klickwerk: no input should be sent, and
-  the UI should explain the privilege mismatch with Continue/refinement available.
-  The recovery card must replace an unhelpful request to type only `chr` manually:
-  manual text entry does not remove the permission block for later sorting.
-  An equally elevated sender and fixture target must remain eligible; own windows
-  must still be rejected.
-- With a higher-integrity Task Manager, choose **Restart as administrator**. Cancel
-  UAC first: the original session, evidence and refinement must remain. Retry and
-  approve as the same Windows user: one restored app opens, paused, with all prior
-  steps, attempts, images and draft text. Continue must capture a NEW desktop and
-  proceed to focus/filter/sort, rather than repeat the launch or old permission
-  refusal. Verify input to the now equally elevated target and takeover monitoring.
-  Test paths containing spaces/non-ASCII characters, repeat restart clicks, stale
-  run IDs and denied launches. No UAC prompt may originate from a model action.
-- Export before cancellation, after cancellation, after restart and after Continue.
-  Inspect `recovery_events` for both integrity levels, failure source, UAC error
-  1223 on cancellation, and successful restoration. Earlier attempt outcomes must
-  remain unchanged. A restart transfer failure must leave the original app open.
-  Test the actual UAC flow on Windows 11; Wine fixtures do not validate consent UI.
+- Test a target at higher integrity than klickwerk: no blocked input may be sent.
+  For a confirmed Medium-to-High conflict, the controller must request ordinary
+  Windows UAC once after stopping the broker, even when handoff focus is denied.
+  Unknown permissions and System-integrity targets must remain paused. An equally
+  elevated sender and fixture target remain eligible; own windows remain rejected.
+- Start the Task Manager task from a normally launched klickwerk. Approve UAC:
+  one restored app opens, keeps the original task/steps/attempts/images, then
+  starts a new countdown automatically when its UI is ready. No manual recovery
+  button or Continue should be needed on this first recovery. Verify a NEW desktop
+  capture, focus of the search field, literal `chr`, descending Memory order and
+  the reported top row/value. Verify physical takeover after automatic resumption.
+- Repeat and cancel UAC: the original session and evidence must remain, with no
+  automatic repeat prompt. Test Stop before launch, during transfer and while the
+  restored UI is getting ready. No automatic input may follow a cancelled startup.
+  A manual **Restart as administrator** retry must preserve unsent refinement and
+  remain paused until Continue. Test spaces/non-ASCII executable paths, repeated
+  commands, stale run IDs, denied launches and missing WebView/configuration.
+- Export after cancellation, restoration/Stop and continuation. Inspect
+  `recovery_events` for both integrity levels, request source, Windows error 1223,
+  transfer failure stage, restoration, parent exit and `automatic_resume_started`.
+  Earlier attempt outcomes and evidence must remain. A failed transfer keeps the
+  original app open. Test actual UAC on Windows 11; Wine does not validate consent UI.
 - Export after a refusal and after refinement. Inspect rejection codes, both
   integrity levels, window title/class/bounds, frame references, model and input
   timing, and handoff verification. Decode a `jpeg_base64` entry as a JPEG.

@@ -12,6 +12,7 @@ export interface Settings {
 
 export type Phase =
   | "idle"
+  | "recovering"
   | "checking"
   | "countdown"
   | "running"
@@ -185,6 +186,7 @@ export interface Snapshot {
   workflow_error: string | null;
   can_restart_elevated?: boolean;
   restored_refinement?: string;
+  pending_resume_run_id?: number | null;
 }
 export interface Models {
   models: string[];
@@ -196,7 +198,12 @@ export interface SpeechUpdate {
   error?: string;
 }
 
-export const activePhases: Phase[] = ["checking", "countdown", "running"];
+export const activePhases: Phase[] = [
+  "recovering",
+  "checking",
+  "countdown",
+  "running",
+];
 export const emptyRun: Run = {
   id: 0,
   phase: "idle",

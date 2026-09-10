@@ -212,19 +212,35 @@ refusal, produces a structured recovery instead of implying that one manual text
 entry will unblock later actions. Reading a screenshot and finishing a verified
 read-only task remain possible. Equal-integrity input uses the existing guards.
 
-The local UI offers an administrator restart only for a stopped session with a
-confirmed block that High integrity can resolve. Its native command validates the
-run ID, reserves the activity gate and invokes the current executable via
-[ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
-with the `runas` verb. The user handles the normal Windows UAC prompt. The model
-has no elevation action; the app manifest and Windows security settings are unchanged.
+After a confirmed privilege block that High integrity can resolve, the controller
+tears down the input broker and requests one Windows administrator restart. A
+recorded takeover, Stop, unknown permissions, stronger target integrity, exhausted
+session capacity or any earlier elevation request prevents an automatic request.
+The native coordinator reserves the activity gate and invokes the current executable
+via [ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
+with `runas`. The user handles the normal Windows UAC prompt. The model has no
+elevation action. Failed foreground handoff does not prevent this native request.
+A declined or failed request leaves the original session open and paused; it never
+loops through repeated consent prompts. The recovery card still allows an explicit
+manual retry after reviewing or refining the task.
 
 An ephemeral loopback socket and a random 256-bit token transfer a size-bounded
-session in memory. Task text, history, evidence and unsent refinement are not
-placed in command-line arguments or temporary files; API credentials are not
-transferred. The new process verifies its integrity, deserializes the session and
-acknowledges receipt before the original exits. It waits for the original process
-to exit before acquiring the single-instance mutex. Failed/cancelled launches or
-failed acknowledgements leave the original session open. The new window remains
-paused until Continue, which creates a new broker and checks fresh permissions,
-focus and screenshots. The existing physical-input stop mechanism still applies.
+session in memory. Transfer protocol version 2 rejects older peers before receipt
+acknowledgement because they do not support the cancellation commit. Task text,
+history, evidence and unsent refinement are not placed in command-line arguments
+or temporary files; API credentials are not transferred. The new process verifies its integrity, deserializes the session and
+acknowledges receipt. The parent checks cancellation and sends a final commit.
+Only then may it exit; the child waits for that exit before acquiring the
+single-instance mutex. The final commit and exit request share the activity lock
+with Stop. Cancellation before this commit aborts the transfer, so closing the
+original window later cannot accidentally authorize the child. Failed acknowledgements,
+missing commits and cancelled transfers leave control disarmed.
+
+The automatic restart restores phase `recovering` and a one-use pending run ID.
+Once the UI is mounted and has sent a heartbeat, `resume_after_restart` consumes
+that ID under the activity lock and resumes the original task. It creates a new
+attempt and broker with the normal countdown, fresh capture, permission/focus
+checks and physical-input stop monitoring. Repeated UI notifications cannot start
+a second controller. Stop can clear the pending ID before startup. The ordinary
+`start_task` command cannot consume this grant. A manual restart keeps the previous
+paused-until-Continue behavior, preserving unsent refinement for review.

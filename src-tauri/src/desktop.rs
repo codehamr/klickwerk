@@ -42,6 +42,7 @@ pub struct Snapshot {
     workflow_error: Option<String>,
     can_restart_elevated: bool,
     restored_refinement: String,
+    pending_resume_run_id: Option<u64>,
 }
 
 pub struct AppState {
@@ -54,6 +55,7 @@ pub struct AppState {
     speech: Mutex<Option<Arc<AtomicBool>>>,
     session: Mutex<Session>,
     restored_refinement: Mutex<String>,
+    pending_resume: Mutex<Option<u64>>,
     workflows: Mutex<WorkflowStore>,
     drafts: Mutex<HashMap<String, PreparedWorkflow>>,
 }
@@ -83,6 +85,7 @@ impl AppState {
             config_error,
             can_restart_elevated: crate::recovery::can_restart(&run),
             restored_refinement: self.restored_refinement.lock().unwrap().clone(),
+            pending_resume_run_id: *self.pending_resume.lock().unwrap(),
             run,
             platform: "windows",
             locale: if unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() }
@@ -198,10 +201,20 @@ async fn test_connection(
     network(app, request_id, provider.check()).await
 }
 #[tauri::command]
-fn stop_task(state: tauri::State<AppState>) {
-    if let Some(cancel) = state.active.lock().unwrap().as_ref() {
+fn stop_task(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if let Some(cancel) = active.as_ref() {
         cancel.store(true, Ordering::SeqCst);
     }
+    if state.pending_resume.lock().unwrap().take().is_some() {
+        let mut view = state.view.lock().unwrap();
+        view.phase = "stopped".into();
+        view.message = crate::recovery::RESUME_CANCELLED.into();
+        view.recovery_event("automatic_resume_cancelled", "stop_button", None, None);
+    }
+    drop(active);
+    emit(&app);
 }
 
 #[tauri::command]
@@ -212,6 +225,17 @@ fn start_task(
     resume_run_id: Option<u64>,
     workflow_id: Option<String>,
 ) -> Result<(), String> {
+    start_task_inner(app, task, reply, resume_run_id, workflow_id, false)
+}
+
+fn start_task_inner(
+    app: tauri::AppHandle,
+    task: String,
+    reply: Option<String>,
+    resume_run_id: Option<u64>,
+    workflow_id: Option<String>,
+    from_uac: bool,
+) -> Result<(), String> {
     if task.trim().is_empty() || task.len() > 32768 {
         return Err("Enter a task of at most 8,192 characters.".into());
     }
@@ -220,8 +244,23 @@ fn start_task(
         return Err("Finish dictation before starting the task.".into());
     }
     let mut active = state.active.lock().unwrap();
+    if from_uac && *state.pending_resume.lock().unwrap() != resume_run_id {
+        return Ok(());
+    }
     if active.is_some() {
         return Err("A task is already running.".into());
+    }
+    if from_uac {
+        let mut pending = state.pending_resume.lock().unwrap();
+        if resume_run_id.is_none() || *pending != resume_run_id {
+            return Ok(());
+        }
+        *pending = None;
+    } else if state.pending_resume.lock().unwrap().is_some() {
+        return Err(
+            "The restored task is preparing to continue. Stop it before starting another task."
+                .into(),
+        );
     }
     let settings = {
         let store = state.config.lock().unwrap();
@@ -241,7 +280,9 @@ fn start_task(
     if let Some(id) = resume_run_id {
         if view.id != id
             || view.task != task
-            || !["stopped", "waiting", "error", "done"].contains(&view.phase.as_str())
+            || (!from_uac
+                && !["stopped", "waiting", "error", "done"].contains(&view.phase.as_str()))
+            || (from_uac && view.phase != "recovering")
         {
             return Err(
                 "This correction no longer belongs to the current task. Start a new task.".into(),
@@ -260,7 +301,7 @@ fn start_task(
             }
             let step_id = view.steps.len() as u32 + 1;
             view.steps.push(Step::note(step_id, "system",
-                "The user explicitly chose to continue without a correction. Inspect the current desktop and verify the last action before proceeding; do not repeat input blindly.", elapsed));
+                if from_uac { "Windows administrator access was approved for this task. Continue from the current desktop after a fresh observation; do not replay old input." } else { "The user explicitly chose to continue without a correction. Inspect the current desktop and verify the last action before proceeding; do not repeat input blindly." }, elapsed));
         } else {
             workflow::add_correction(&mut view.steps, &answer, elapsed)?;
         }
@@ -291,8 +332,16 @@ fn start_task(
     );
     if view.recovery.take().is_some() || !view.recovery_events.is_empty() {
         view.recovery_event(
-            "resume_requested",
-            "user_continue",
+            if from_uac {
+                "automatic_resume_started"
+            } else {
+                "resume_requested"
+            },
+            if from_uac {
+                "ui_ready"
+            } else {
+                "user_continue"
+            },
             platform::window::privileges(std::process::id())
                 .ok()
                 .map(|p| p.0),
@@ -314,6 +363,52 @@ fn start_task(
         controller(app, settings, task, cancel).await;
     });
     Ok(())
+}
+
+#[tauri::command]
+fn resume_after_restart(app: tauri::AppHandle, run_id: u64) -> Result<(), String> {
+    let (task, refinement) = {
+        let state = app.state::<AppState>();
+        if *state.pending_resume.lock().unwrap() != Some(run_id) {
+            return Ok(());
+        }
+        (
+            state.view.lock().unwrap().task.clone(),
+            state.restored_refinement.lock().unwrap().clone(),
+        )
+    };
+    let result = start_task_inner(
+        app.clone(),
+        task,
+        if refinement.is_empty() {
+            None
+        } else {
+            Some(refinement)
+        },
+        Some(run_id),
+        None,
+        true,
+    );
+    if let Err(message) = &result {
+        let state = app.state::<AppState>();
+        let mut view = state.view.lock().unwrap();
+        if view.id == run_id && view.phase == "recovering" {
+            view.phase = "error".into();
+            view.message = message.clone();
+            view.recovery_event(
+                "automatic_resume_failed",
+                "ui_ready",
+                None,
+                Some(crate::diagnostics::InputFailure::new(
+                    "resume_setup_failed",
+                    message,
+                )),
+            );
+        }
+        drop(view);
+        emit(&app);
+    }
+    result
 }
 
 #[tauri::command]
@@ -355,26 +450,58 @@ async fn restart_as_administrator(
         *active = Some(Arc::new(AtomicBool::new(false)));
         session
     };
-    let result = tokio::task::spawn_blocking(move || platform::restart::launch(owner, session))
-        .await
-        .unwrap_or_else(|_| {
-            Err(crate::diagnostics::InputFailure::new(
-                "restart_worker_failed",
-                crate::recovery::RESTART_FAILED,
-            ))
-        });
-    match result {
-        Ok(()) => {
+    let cancel = app
+        .state::<AppState>()
+        .active
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    perform_restart(app, owner, session, cancel, "user_restart").await
+}
+
+async fn perform_restart(
+    app: tauri::AppHandle,
+    owner: usize,
+    session: crate::recovery::RestartSession,
+    cancel: Arc<AtomicBool>,
+    source: &'static str,
+) -> Result<(), String> {
+    let worker_cancel = cancel.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        platform::restart::launch(owner, session, &worker_cancel)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(crate::diagnostics::InputFailure::new(
+            "restart_worker_failed",
+            crate::recovery::RESTART_FAILED,
+        ))
+    });
+    // Serialize the final cancellation decision and exit request with Stop.
+    // The child cannot continue from receipt alone, even if this app closes later.
+    let result = result.and_then(|restart| {
+        let state = app.state::<AppState>();
+        let _active = state.active.lock().unwrap();
+        let committed = restart.commit(&cancel);
+        if committed.is_ok() {
             app.exit(0);
-            Ok(())
         }
+        committed
+    });
+    match result {
+        Ok(()) => Ok(()),
         Err(failure) => {
             {
                 let state = app.state::<AppState>();
                 let mut active = state.active.lock().unwrap();
-                state.view.lock().unwrap().recovery_event(
+                let mut view = state.view.lock().unwrap();
+                view.phase = "stopped".into();
+                view.message = failure.message.clone();
+                view.recovery_event(
                     "elevation_failed",
-                    "user_restart",
+                    source,
                     platform::window::privileges(std::process::id())
                         .ok()
                         .map(|p| p.0),
@@ -382,6 +509,12 @@ async fn restart_as_administrator(
                 );
                 *active = None;
             }
+            let report = handoff(&app).await;
+            app.state::<AppState>()
+                .view
+                .lock()
+                .unwrap()
+                .record_handoff(report);
             emit(&app);
             Err(failure.message)
         }
@@ -625,6 +758,7 @@ fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, Strin
 }
 
 fn clear_session(state: &AppState) {
+    state.pending_resume.lock().unwrap().take();
     state.restored_refinement.lock().unwrap().clear();
     *state.view.lock().unwrap() = RunView::default();
     *state.session.lock().unwrap() = Session::default();
@@ -1312,6 +1446,7 @@ async fn controller(
     let end = result
         .err()
         .unwrap_or_else(|| End::Done("Finished.".into()));
+    let mut automatic = None;
     {
         let state = app.state::<AppState>();
         let mut active = state.active.lock().unwrap();
@@ -1371,9 +1506,30 @@ async fn controller(
         }
         view.record_handoff(handoff_report);
         view.finish_attempt();
-        *active = None;
+        if view.recovery.is_some() {
+            match crate::recovery::automatic_session(
+                &mut view,
+                state.session.lock().unwrap().memory.clone(),
+                cancel.load(Ordering::SeqCst),
+            ) {
+                Ok(session) => automatic = Some(session),
+                Err(reason) => {
+                    view.recovery_event("automatic_elevation_skipped", &reason, None, None)
+                }
+            }
+        }
+        if automatic.is_none() {
+            *active = None;
+        }
     }
     emit(&app);
+    if let Some(session) = automatic {
+        let owner = app
+            .get_webview_window("main")
+            .and_then(|window| window.hwnd().ok())
+            .map_or(0, |handle| handle.0 as usize);
+        let _ = perform_restart(app, owner, session, cancel, crate::recovery::AUTO_SOURCE).await;
+    }
 }
 
 fn app_context() -> tauri::Context<tauri::Wry> {
@@ -1419,9 +1575,12 @@ pub fn run() {
     let _mutex = platform::Handle(mutex);
     let config = ConfigStore::beside_executable();
     let workflows = WorkflowStore::load(config.path.with_file_name("workflows.json"));
-    let (view, memory, refinement) = restored.map_or_else(
-        || (RunView::default(), String::new(), String::new()),
-        |session| (session.run, session.memory, session.refinement),
+    let (view, memory, refinement, pending_resume) = restored.map_or_else(
+        || (RunView::default(), String::new(), String::new(), None),
+        |session| {
+            let pending = session.resume_after_approval.then_some(session.run.id);
+            (session.run, session.memory, session.refinement, pending)
+        },
     );
     let next_id = view.id;
     let state = AppState {
@@ -1434,6 +1593,7 @@ pub fn run() {
         speech: Mutex::new(None),
         session: Mutex::new(Session { memory }),
         restored_refinement: Mutex::new(refinement),
+        pending_resume: Mutex::new(pending_resume),
         workflows: Mutex::new(workflows),
         drafts: Mutex::new(HashMap::new()),
     };
@@ -1448,6 +1608,7 @@ pub fn run() {
             cancel_request,
             start_task,
             restart_as_administrator,
+            resume_after_restart,
             get_workflow,
             export_session,
             prepare_workflow,

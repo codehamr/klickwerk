@@ -1,5 +1,30 @@
 # Validation status — 2026-09-10
 
+## Current consent recovery follow-up
+
+Revision `2026-09-consent-and-resume-v3` fixes the latest exported Task Manager
+run stopping at a confirmed Medium-to-High integrity conflict without requesting
+an administrator restart. The controller now requests ordinary Windows consent
+once, transfers the original session, and continues after the restored UI is ready.
+Stop and declined consent keep control paused; previous failures are historical
+context for the new capture, not reasons to repeat the launch or permission refusal.
+
+Validation for this change: 42 portable Rust tests, all 36 Chromium tests,
+TypeScript/ESLint and Windows-target Clippy with warnings denied pass. The native
+input suite also passed under Wine/Xvfb (13 monitoring and 17 disposable editor
+checks). Added tests cover same-task/evidence retention, one automatic request,
+Stop before/during/after transfer preparation, missing commits, old protocol peers,
+duplicate UI notifications and actual restored bootstrap under React StrictMode.
+The normal Windows x64 release is rebuilt at `build/klickwerk.exe`; its identity is
+recorded in `build/validation/consent-recovery-release.json`.
+
+Real Windows 11 UAC/WebView2 startup and live-model filter/sort/result completion
+still require target-PC acceptance. Wine/editor fixtures and browser mocks do not
+establish those results. See [Windows acceptance](windows-acceptance.md) and the
+[export diagnosis](session-export.md#consent-and-continuation-regression).
+
+## Earlier handoff diagnostics baseline
+
 The interface now returns control explicitly after takeover, questions, success and
 failure. Workflows consolidate temporary session evidence into one saved start
 prompt. English/German UI detection and override, bilingual suggestions, paced text,

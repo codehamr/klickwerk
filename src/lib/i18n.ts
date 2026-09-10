@@ -13,6 +13,21 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  Stop: "Stoppen",
+  "Waiting for Windows permission": "Warte auf Windows-Zustimmung",
+  "Resuming your task": "Deine Aufgabe wird fortgesetzt",
+  "Your task continues after Windows permission is approved.":
+    "Nach deiner Windows-Zustimmung geht deine Aufgabe weiter.",
+  "Use Stop to cancel continuation.":
+    "Mit Stoppen kannst du die Fortsetzung abbrechen.",
+  "Windows permission is needed to control this app. Approve the Windows prompt to continue the task.":
+    "Zum Steuern dieser App benötigt klickwerk Windows-Rechte. Bestätige die Windows-Abfrage, um die Aufgabe fortzusetzen.",
+  "Administrator access was approved. Resuming your task from the current desktop…":
+    "Die Administratorrechte wurden bestätigt. Deine Aufgabe wird auf dem aktuellen Desktop fortgesetzt…",
+  "Automatic continuation was cancelled. Your task is paused.":
+    "Die automatische Fortsetzung wurde abgebrochen. Deine Aufgabe ist pausiert.",
+  "The restored task is preparing to continue. Stop it before starting another task.":
+    "Die wiederhergestellte Aufgabe wird fortgesetzt. Stoppe sie, bevor du eine andere Aufgabe startest.",
   "Windows blocks input because this app has higher privileges than klickwerk. Restart klickwerk as administrator, or reopen the target app without administrator rights. A manual text entry will not unblock subsequent clicks.":
     "Windows blockiert Eingaben, weil diese App höhere Rechte als klickwerk hat. Starte klickwerk als Administrator neu oder öffne die Ziel-App ohne Administratorrechte. Eine manuelle Texteingabe hebt die Sperre für spätere Klicks nicht auf.",
   "Administrator rights needed": "Administratorrechte erforderlich",

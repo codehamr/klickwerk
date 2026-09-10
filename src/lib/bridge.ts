@@ -55,6 +55,8 @@ export const api = {
     }),
   restartAsAdministrator: (runId: number, refinement: string) =>
     call<void>("restart_as_administrator", { runId, refinement }),
+  resumeAfterRestart: (runId: number) =>
+    call<void>("resume_after_restart", { runId }),
   getWorkflow: (id: string) => call<Workflow>("get_workflow", { id }),
   exportSession: (runId: number, refinement: string) =>
     call<string | null>("export_session", {

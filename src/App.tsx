@@ -59,7 +59,10 @@ export function App() {
   const dictatingRefinement = useRef(false);
   const receivedUpdate = useRef(false);
   const stopPending = useRef(false);
+  const resumedRun = useRef<number | null>(null);
   const run = snapshot?.run;
+  const recovering = run?.phase === "recovering";
+  const pendingResume = snapshot?.pending_resume_run_id;
   const active = !!run && activePhases.includes(run.phase);
   const current = !!run && run.phase !== "idle" && run.id !== dismissedRun;
   const refining =
@@ -115,14 +118,43 @@ export function App() {
 
   useEffect(() => {
     if (!active) return;
-    void api.heartbeat();
+    void api.heartbeat().catch(() => undefined);
     const timer = setInterval(() => {
       void api.heartbeat().catch(() => undefined);
     }, 250);
     return () => clearInterval(timer);
   }, [active]);
   useEffect(() => {
-    if (native || !active) return;
+    if (
+      !recovering ||
+      pendingResume == null ||
+      resumedRun.current === pendingResume
+    )
+      return;
+    let cancelled = false;
+    // The native process grants this one-use continuation only after Windows consent.
+    // Wait for a live UI heartbeat before it starts a new monitored countdown.
+    void api
+      .heartbeat()
+      .then(() => {
+        if (
+          cancelled ||
+          stopPending.current ||
+          resumedRun.current === pendingResume
+        )
+          return;
+        resumedRun.current = pendingResume;
+        return api.resumeAfterRestart(pendingResume);
+      })
+      .catch((error) => {
+        if (!cancelled) setNotice(errorText(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [recovering, pendingResume]);
+  useEffect(() => {
+    if (native || !active || recovering) return;
     function takeover(event: Event) {
       if (!event.isTrusted || stopPending.current) return;
       if (event.type === "keydown" && (event as KeyboardEvent).repeat) return;
@@ -144,7 +176,7 @@ export function App() {
       events.forEach((event) =>
         window.removeEventListener(event, takeover, true),
       );
-  }, [active]);
+  }, [active, recovering]);
   useEffect(() => {
     if (snapshot?.settings.language && snapshot?.locale)
       setLanguage(snapshot.settings.language, snapshot.locale);
@@ -303,6 +335,16 @@ export function App() {
     }
   }
 
+  async function stop() {
+    stopPending.current = true;
+    try {
+      await api.stop();
+    } catch (error) {
+      stopPending.current = false;
+      setNotice(errorText(error));
+    }
+  }
+
   if (!snapshot)
     return (
       <div className="boot-screen">
@@ -358,6 +400,12 @@ export function App() {
             </span>
           </a>
           <div className="header-actions">
+            {active && (
+              <Button variant="secondary" onClick={() => void stop()}>
+                <Pause size={16} />
+                {t("Stop")}
+              </Button>
+            )}
             <span className="desktop-label">
               {t("A little less busywork.")}
             </span>
@@ -400,11 +448,15 @@ export function App() {
             <p>
               {refining
                 ? t("Review the result, refine it, or keep it for next time.")
-                : active
-                  ? t("Move your mouse or press any key to take over.")
-                  : t(
-                      "Describe the outcome. I’ll handle the clicks and typing.",
-                    )}
+                : recovering
+                  ? t(
+                      "Your task continues after Windows permission is approved.",
+                    )
+                  : active
+                    ? t("Move your mouse or press any key to take over.")
+                    : t(
+                        "Describe the outcome. I’ll handle the clicks and typing.",
+                      )}
             </p>
           </section>
 
@@ -519,18 +571,28 @@ export function App() {
                   <MousePointer2 size={25} />
                 </span>
                 <h2>
-                  {run?.phase === "countdown"
-                    ? t("Starting in a moment")
-                    : run?.phase === "checking"
-                      ? t("Getting ready")
-                      : t("Working on your desktop")}
+                  {recovering
+                    ? t(
+                        pendingResume == null
+                          ? "Waiting for Windows permission"
+                          : "Resuming your task",
+                      )
+                    : run?.phase === "countdown"
+                      ? t("Starting in a moment")
+                      : run?.phase === "checking"
+                        ? t("Getting ready")
+                        : t("Working on your desktop")}
                 </h2>
                 <p>{t(run?.message ?? "")}</p>
                 {run?.phase === "countdown" && (
                   <div className="countdown-track" />
                 )}
                 <span className="active-caption">
-                  {t("Move your mouse or press any key to interrupt.")}
+                  {t(
+                    recovering
+                      ? "Use Stop to cancel continuation."
+                      : "Move your mouse or press any key to interrupt.",
+                  )}
                 </span>
               </div>
             ) : (
@@ -638,7 +700,11 @@ export function App() {
           <div className="composer-caption">
             <span>
               <MousePointer2 size={13} />
-              {t("Move your mouse or type to take over. Anytime.")}
+              {t(
+                recovering
+                  ? "Use Stop to cancel continuation."
+                  : "Move your mouse or type to take over. Anytime.",
+              )}
             </span>
             {!active && (
               <span className="enter-hint">

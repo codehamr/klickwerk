@@ -7,7 +7,7 @@ fixture report. Cancelling leaves the session unchanged, and failed writes can b
 retried. Existing files are replaced only after the complete report is written.
 
 Export before choosing New task, deleting the workflow or closing the app.
-The explicit administrator restart transfers the session in memory and preserves
+An administrator restart transfers the session in memory and preserves
 its history and bounded evidence without requiring an export first. Raw
 history remains temporary until explicitly exported; workflow storage still
 contains only consolidated start prompts. A saved workflow without its current
@@ -23,7 +23,7 @@ session has no old action history to export.
 | `run` | Original task, session ID, current outcome, message, question/result, duration, start time, workflow association, steps and attempts |
 | `run.steps` | Every recorded step in order, with actor, description, action and its arguments, status, elapsed time, image dimensions and desktop coordinates |
 | `run.recovery` | Current structured privilege block, including sender/target integrity; cleared when continuing or after a successful administrator restart |
-| `run.recovery_events` | Timestamped privilege blocks, explicit restart requests, failed/cancelled launches with Windows error codes, successful restoration and subsequent resume requests |
+| `run.recovery_events` | Timestamped privilege blocks, automatic/manual consent requests, failed/cancelled launches with Windows error codes, successful transfer/restoration and automatic/manual continuation |
 | `run.attempts` | Every initial start and continuation, with timestamps, step range, user reply, outcome, model/server configuration and warm-start prompt used at that time |
 | `workflow` | Associated workflow and its current consolidated prompt, or `null` |
 | `warm_start_prompt` | Current learned instructions retained by the session |
@@ -80,10 +80,10 @@ and `window_inspection_failed`. Native checks run again in the broker before inp
 and between batches. `rejection.code` also identifies changed observations/focus,
 monitor gaps and incomplete input. Completed input still requires visual verification.
 The numeric levels are Windows mandatory integrity RIDs; elevation alone is not an
-input permission decision. Higher-integrity input pauses with explicit restart
-recovery when administrator integrity can resolve it, or the user can reopen the
-target without administrator rights. The app never requests elevation from a model
-action and does not change Windows policy.
+input permission decision. Higher-integrity input triggers one native Windows consent request when administrator
+integrity can resolve it. Approval restores and continues the task; rejection
+leaves it paused with manual recovery available. The model cannot operate UAC or
+request arbitrary elevated commands, and the app does not change Windows policy.
 
 The supplied version 1 Task Manager log proves that Ctrl+Shift+Escape was dispatched
 and the next click was refused, but cannot identify which of the three old generic
@@ -134,3 +134,47 @@ Cancellation is represented as `elevation_failed` with failure code
 `elevation_cancelled` and Windows error 1223; launch and transfer errors have their
 own codes. `elevation_restored` records the verified new sender integrity. Earlier
 steps keep their original permissions and attempted actions for comparison.
+
+
+## Consent and continuation regression
+
+The schema 3 export from revision `2026-09-privilege-recovery-v2`
+(`started_at: 1789047667414`) records a successful Task Manager launch and a
+subsequent `ask_user`. Task Manager has High integrity (12288), while the sender
+has Medium integrity (8192). Its recovery history contains only `privilege_blocked`
+from `model_handoff`: there was no administrator restart request to diagnose.
+The final image shows Task Manager with an empty search field and CPU sorting.
+The handoff has `focused: false` and attachment error 5, so the manual recovery
+card was not reliably brought in front. This run did not attempt filter entry.
+
+Revision `2026-09-consent-and-resume-v3` removes the manual button/Continue dependency
+from the first recoverable privilege block. Normal successful automatic recovery
+records this sequence, retaining earlier attempts and evidence:
+
+1. `privilege_blocked` includes the original sender and target permissions.
+2. `elevation_requested`, source `controller_privilege_recovery`, means the native
+   coordinator scheduled the ordinary Windows permission request.
+3. `elevation_restored` means the receiving process verified High integrity and
+   decoded the original session.
+4. `restart_parent_exited` confirms committed transfer and exit of the old instance.
+5. `automatic_resume_started`, source `ui_ready`, marks a fresh attempt after the
+   restored UI is ready. Subsequent step diagnostics contain fresh permissions,
+   screenshots, focus and actual input acknowledgements.
+
+`automatic_elevation_skipped` records `user_cancelled`, `already_requested` or
+`not_recoverable`. `elevation_failed` retains a structured failure: `elevation_cancelled`
+with Windows error 1223, `elevation_launch_failed`, `restart_child_exited`,
+`restart_child_timeout`, `restart_auth_failed`, `restart_transfer_write_failed`,
+`restart_ack_failed`, `restart_commit_failed` or `restart_cancelled` distinguish
+consent, process startup, transfer and explicit Stop. Setup failures have their own
+listener/token/executable/socket/accept/worker codes. `automatic_resume_cancelled`
+and `automatic_resume_failed` identify problems after restoration. Event timestamps
+allow measuring these gaps separately from completed action timings. Tokens and
+credentials are never included in events.
+
+Core tests exercise original-task/evidence retention, consent retry suppression,
+cancelled/taken-over sessions, a real loopback committed transfer, cancellation
+during receipt and missing/invalid commits. Browser tests exercise UI readiness,
+duplicate notifications, both languages and Stop during pending continuation.
+These fixtures do not establish real Windows UAC/WebView2 or live-model Task Manager
+completion; follow the target-PC acceptance steps.

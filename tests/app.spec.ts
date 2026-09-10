@@ -1263,3 +1263,219 @@ test("administrator restart restores the unsent refinement at startup in German"
     page.getByRole("button", { name: "Als Administrator neu starten" }),
   ).toBeHidden();
 });
+
+test("administrator consent recovery waits for UI readiness and resumes the same task once", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const snapshot = await api.bootstrap();
+    snapshot.settings.language = "de";
+    snapshot.run = {
+      ...snapshot.run,
+      id: 73,
+      phase: "recovering",
+      task: 'Öffne Task-Manager, filtere nach "chr", sortiere nach RAM und nenne den Top-Prozess.',
+      message:
+        "Windows permission is needed to control this app. Approve the Windows prompt to continue the task.",
+    };
+    snapshot.pending_resume_run_id = null;
+    const calls: string[] = [];
+    Object.assign(window, { recoveryCalls: calls, recoverySnapshot: snapshot });
+    api.heartbeat = async () => {
+      calls.push("heartbeat");
+    };
+    api.resumeAfterRestart = async (id: number) => {
+      calls.push(`resume:${id}`);
+      snapshot.pending_resume_run_id = null;
+      snapshot.run.phase = "countdown";
+      snapshot.run.message =
+        "Starting in 2 seconds. Move your mouse or press any key to interrupt.";
+      window.dispatchEvent(
+        new CustomEvent("state", { detail: structuredClone(snapshot) }),
+      );
+    };
+    api.start = async () => {
+      throw new Error(
+        "Automatic recovery must use the native continuation token",
+      );
+    };
+    window.dispatchEvent(
+      new CustomEvent("state", { detail: structuredClone(snapshot) }),
+    );
+  });
+  await expect(
+    page.getByRole("heading", { name: "Warte auf Windows-Zustimmung" }),
+  ).toBeVisible();
+  await page.mouse.move(25, 25);
+  await expect(
+    page.getByRole("heading", { name: "Warte auf Windows-Zustimmung" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Stoppen", exact: true }),
+  ).toBeEnabled();
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { recoveryCalls: string[] }).recoveryCalls.some(
+        (x) => x.startsWith("resume:"),
+      ),
+    ),
+  ).toBe(false);
+  await page.evaluate(() => {
+    const snapshot = (
+      window as unknown as {
+        recoverySnapshot: import("../src/lib/types").Snapshot;
+      }
+    ).recoverySnapshot;
+    snapshot.pending_resume_run_id = 73;
+    snapshot.run.message =
+      "Administrator access was approved. Resuming your task from the current desktop…";
+    // Duplicate snapshots must not start two controllers.
+    window.dispatchEvent(
+      new CustomEvent("state", { detail: structuredClone(snapshot) }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("state", { detail: structuredClone(snapshot) }),
+    );
+  });
+  await expect(
+    page.getByRole("heading", { name: "Es geht gleich los" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      'Öffne Task-Manager, filtere nach "chr", sortiere nach RAM und nenne den Top-Prozess.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const calls = await page.evaluate(
+    () => (window as unknown as { recoveryCalls: string[] }).recoveryCalls,
+  );
+  expect(calls.filter((x) => x.startsWith("resume:"))).toEqual(["resume:73"]);
+  expect(calls.indexOf("heartbeat")).toBeLessThan(calls.indexOf("resume:73"));
+  await expect(
+    page.getByRole("button", { name: "Weiter", exact: true }),
+  ).toBeHidden();
+});
+
+test("administrator continuation can be stopped while the restored UI is getting ready", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const snapshot = await api.bootstrap();
+    snapshot.run = {
+      ...snapshot.run,
+      id: 74,
+      phase: "recovering",
+      task: "Filter chr",
+      message:
+        "Administrator access was approved. Resuming your task from the current desktop…",
+    };
+    snapshot.pending_resume_run_id = 74;
+    let release!: () => void;
+    const heartbeat = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: number[] = [];
+    Object.assign(window, {
+      releaseRecoveryHeartbeat: release,
+      recoveryResumeCalls: calls,
+    });
+    api.heartbeat = () => heartbeat;
+    api.resumeAfterRestart = async (id: number) => {
+      calls.push(id);
+    };
+    api.stop = async () => {
+      snapshot.pending_resume_run_id = null;
+      snapshot.run.phase = "stopped";
+      snapshot.run.message =
+        "Automatic continuation was cancelled. Your task is paused.";
+      window.dispatchEvent(
+        new CustomEvent("state", { detail: structuredClone(snapshot) }),
+      );
+    };
+    window.dispatchEvent(
+      new CustomEvent("state", { detail: structuredClone(snapshot) }),
+    );
+  });
+  await expect(
+    page.getByRole("heading", { name: "Resuming your task" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(
+    page.getByText(
+      "Automatic continuation was cancelled. Your task is paused.",
+    ),
+  ).toBeVisible();
+  await page.evaluate(async () => {
+    (
+      window as unknown as { releaseRecoveryHeartbeat: () => void }
+    ).releaseRecoveryHeartbeat();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { recoveryResumeCalls: number[] })
+          .recoveryResumeCalls,
+    ),
+  ).toEqual([]);
+  await expect(
+    page.getByRole("button", { name: "Continue", exact: true }),
+  ).toBeVisible();
+});
+
+test("administrator automatic continuation starts once after restored bootstrap in StrictMode", async ({
+  page,
+}) => {
+  await page.route("**/src/main.tsx", async (route) => {
+    const response = await route.fetch();
+    const body = await response.text();
+    await route.fulfill({
+      response,
+      body: `
+      import { api as fixtureApi } from "/src/lib/bridge.ts";
+      const initialBootstrap = fixtureApi.bootstrap;
+      let restoredSnapshot;
+      window.bootstrapResumeCalls = [];
+      fixtureApi.bootstrap = async () => {
+        const snapshot = await initialBootstrap();
+        snapshot.run = { ...snapshot.run, id: 75, task: 'Filter "chr" and read top memory usage',
+          phase: "recovering", message: "Administrator access was approved. Resuming your task from the current desktop…" };
+        snapshot.pending_resume_run_id = 75;
+        restoredSnapshot = snapshot;
+        return structuredClone(snapshot);
+      };
+      fixtureApi.resumeAfterRestart = async (id) => {
+        window.bootstrapResumeCalls.push(id);
+        restoredSnapshot.pending_resume_run_id = null;
+        restoredSnapshot.run.phase = "checking";
+        restoredSnapshot.run.message = "Getting ready to help…";
+        window.dispatchEvent(new CustomEvent("state", { detail: structuredClone(restoredSnapshot) }));
+      };
+      ${body}
+    `,
+    });
+  });
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Getting ready", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Filter "chr" and read top memory usage', { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { bootstrapResumeCalls: number[] })
+          .bootstrapResumeCalls,
+    ),
+  ).toEqual([75]);
+  await expect(
+    page.getByRole("button", { name: "Continue", exact: true }),
+  ).toBeHidden();
+});
