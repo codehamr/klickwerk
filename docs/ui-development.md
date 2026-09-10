@@ -22,7 +22,9 @@ to `build/visual/`. Tests cover dialog focus, mouse/keyboard takeover, countdown
 cancellation, unified URLs, settings persistence, multilingual task preservation,
 persistent success handoff, questions, error recovery, correction continuity, workflow
 finalization/editing/deletion, stale draft refusal, language detection/override,
-dark mode and narrow layouts.
+dark mode and narrow layouts. Settings checks include debounced autosave, serialized
+slow writes, close-time flushing, retry/discard after failure, immediate preference
+changes, and correctly spaced number/unit labels in both languages.
 On Linux, an installed `/usr/bin/chromium` can be used; otherwise run
 `npx playwright install --with-deps chromium`. `PLAYWRIGHT_CHROMIUM_EXECUTABLE`
 can select another test browser binary.

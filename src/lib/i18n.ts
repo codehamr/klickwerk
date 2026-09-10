@@ -13,6 +13,16 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  "Changes save automatically": "Änderungen werden automatisch gespeichert",
+  "All changes saved": "Alle Änderungen gespeichert",
+  "Changes not saved.": "Änderungen nicht gespeichert.",
+  "Discard unsaved changes": "Ungespeicherte Änderungen verwerfen",
+  "Enter a valid server address.": "Gib eine gültige Server-Adresse ein.",
+  Done: "Fertig",
+  "{count} seconds": "{count} Sekunden",
+  "{count} step": "{count} Schritt",
+  "{count} steps": "{count} Schritte",
+
   "Learn & use": "Lernen & verwenden",
   "My workflow": "Mein Workflow",
   "My desktop workflow": "Mein Desktop-Workflow",

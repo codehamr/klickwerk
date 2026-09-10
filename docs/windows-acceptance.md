@@ -12,6 +12,10 @@ do not establish physical hardware or WebView2 acceptance.
 - Enter a bare local address, an HTTPS URL, and a proxy API path in the same field.
   Enter the API key before loading models. Test the connection and verify settings
   survive restart. Check automatic German/English detection and manual override.
+- Edit settings without a Save button. Verify text saves after a short pause,
+  selections save immediately, and closing finishes pending changes. A read-only
+  folder must leave a visible error with retry and discard options. Check spaces
+  between numbers and units in response timeout and task limit in both languages.
 - Verify existing configurations with legacy `provider` values still load and
   that saving removes that unused field. API keys use DPAPI and do not appear in
   public snapshots; changing server origin clears the old key.

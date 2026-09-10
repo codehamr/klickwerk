@@ -141,6 +141,14 @@ source desktops to 32 megapixels. Server error bodies and credentials are not
 echoed in the UI. Settings resolve relative to the EXE, use atomic replacement,
 and protect API keys with Windows DPAPI. Changing origin clears the previous key.
 
+Settings autosave text edits after a 500 ms pause and selections immediately.
+Writes are serialized and drain the latest draft, so slow responses cannot overwrite
+newer edits. Closing flushes pending changes and waits for completion. A failed
+save keeps the dialog and draft available for retry or explicit discard of only
+unsaved changes. Save responses update application preferences without replacing
+the text being edited. Response timeout and step limit labels translate the number
+and unit together, including their separating space.
+
 SAPI dictation runs in its own COM apartment with the default recognizer and audio
 input. It can fill a task or correction, is bounded to two minutes, and publishes
 interim/final text. Missing audio support leaves typed prompts available.

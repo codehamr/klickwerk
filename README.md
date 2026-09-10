@@ -20,7 +20,7 @@ tools; users do not install them.
    `localhost:11434` work directly; standard API paths are completed automatically.
    Focusing the model field loads models with the current key. Manual model IDs also work.
 4. **Test connection** checks image understanding using a generated shape image.
-   Save settings when ready.
+   Settings save automatically; **Done** returns to your task.
 5. Enter a task and click **Let’s do it** or press **Ctrl + Enter**. A short notice
    explains that control starts in two seconds. The window then minimizes.
 6. Move your mouse or press any key to interrupt from any application. Input stops,
@@ -61,9 +61,11 @@ read nor copy private `.env` files, and never delete `config.cfg`.
 API keys entered in Settings are saved in that file with Windows DPAPI protection.
 They can be unlocked by the same Windows user on that PC. Re-enter the key after
 moving the app to another account/PC. All other settings remain readable. Changing
-the server origin clears the previous key. Unsaved dialog edits are discarded on
-close. A malformed config is preserved; explicitly saving replacement settings
-first creates a `config.invalid-<pid>.cfg` backup.
+the server origin clears the previous key. Text edits save after a short pause;
+selections save immediately. Closing Settings finishes any pending save. The status
+shows when all changes are saved; failures keep your edits available for retry or
+explicit discard. Replacing a malformed config first creates a
+`config.invalid-<pid>.cfg` backup.
 
 The app sends desktop screenshots, task text, action history, and corrections to
 the **selected model server** while a task runs. Preparing a workflow sends its

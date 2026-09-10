@@ -1069,6 +1069,26 @@ input::placeholder {
   justify-content: space-between;
   gap: 13px;
 }
+.settings-save-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.settings-save-status svg {
+  flex-shrink: 0;
+}
+.settings-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
 .config-location {
   display: flex;
   align-items: center;
@@ -1107,6 +1127,7 @@ input::placeholder {
   font-size: 11px;
   padding: 8px;
   min-width: 110px;
+  flex-shrink: 0;
 }
 .workflow-footer {
   gap: 8px;
@@ -1336,13 +1357,18 @@ input::placeholder {
   }
   .settings-footer {
     padding: 15px 20px;
+    flex-wrap: wrap;
+  }
+  .settings-save-status {
+    justify-content: flex-start;
+    text-align: left;
   }
   .settings-tabs {
     padding-left: 20px;
     padding-right: 20px;
   }
   .config-location {
-    max-width: 140px;
+    flex-basis: 100%;
   }
   .workflow-footer .button {
     padding-left: 10px;

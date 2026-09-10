@@ -1,6 +1,7 @@
 import { useI18n } from "../lib/i18n";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Check,
   ChevronDown,
   Eye,
   EyeOff,
@@ -42,12 +43,95 @@ export function SettingsDialog({
     kind: "success" | "error" | "info";
     text: string;
   } | null>(null);
-  const [busy, setBusy] = useState<"models" | "test" | "save" | null>(null);
+  const [busy, setBusy] = useState<"models" | "test" | null>(null);
+  const [saveState, setSaveState] = useState<
+    "saved" | "pending" | "saving" | "error"
+  >("saved");
+  const [saveError, setSaveError] = useState("");
+  const [closing, setClosing] = useState(false);
+  const pending = useRef({
+    settings: snapshot.settings,
+    key: null as string | null,
+    revision: 0,
+  });
+  const savedRevision = useRef(0);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const saveTask = useRef<Promise<boolean> | null>(null);
+
+  // Serialize writes and read the latest edit after each response. An older save
+  // must never replace a newer draft or leave it unsaved when the dialog closes.
+  const flush = useCallback((): Promise<boolean> => {
+    clearTimeout(saveTimer.current);
+    if (saveTask.current) return saveTask.current;
+    const persist = async () => {
+      while (savedRevision.current !== pending.current.revision) {
+        const edit = pending.current;
+        setSaveState("saving");
+        setSaveError("");
+        try {
+          try {
+            normalizeServerUrl(edit.settings.base_url);
+          } catch {
+            throw new Error("Enter a valid server address.");
+          }
+          const next = await api.save(edit.settings, edit.key);
+          savedRevision.current = edit.revision;
+          onSaved(next);
+        } catch (error) {
+          if (edit.revision !== pending.current.revision) continue;
+          setSaveState("error");
+          setSaveError(errorText(error));
+          return false;
+        }
+      }
+      setSaveState("saved");
+      return true;
+    };
+    saveTask.current = Promise.resolve()
+      .then(persist)
+      .finally(() => {
+        saveTask.current = null;
+      });
+    return saveTask.current;
+  }, [onSaved]);
+
+  function queueSave(
+    settings: SettingsData,
+    nextKey: string | null,
+    immediate = false,
+  ) {
+    setDraft(settings);
+    setKey(nextKey);
+    pending.current = {
+      settings,
+      key: nextKey,
+      revision: pending.current.revision + 1,
+    };
+    setSaveState("pending");
+    setSaveError("");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(
+      () => {
+        void flush();
+      },
+      immediate ? 0 : 500,
+    );
+  }
+
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
   const request = useRef("");
   const previousOpen = useRef(false);
 
   useEffect(() => {
     if (open && !previousOpen.current) {
+      clearTimeout(saveTimer.current);
+      pending.current = { settings: snapshot.settings, key: null, revision: 0 };
+      savedRevision.current = 0;
+      setSaveState("saved");
+      setSaveError("");
+      setClosing(false);
       setDraft(snapshot.settings);
       setKey(null);
       setNotice(null);
@@ -73,19 +157,35 @@ export function SettingsDialog({
     }
     setBusy(null);
     setNotice(null);
+    let nextKey = pending.current.key;
     if (field === "base_url") {
       setModels([]);
       try {
         if (
           normalizeServerUrl(String(value)).origin !==
-          normalizeServerUrl(draft.base_url).origin
+          normalizeServerUrl(pending.current.settings.base_url).origin
         )
-          setKey("");
+          nextKey = "";
       } catch {
-        setKey("");
+        nextKey = "";
       }
     }
-    setDraft((current) => ({ ...current, [field]: value }));
+    queueSave(
+      { ...pending.current.settings, [field]: value },
+      nextKey,
+      field !== "base_url" && field !== "model",
+    );
+  }
+
+  function updateKey(value: string) {
+    setModels([]);
+    setNotice(null);
+    if (request.current) {
+      void api.cancelRequest(request.current);
+      request.current = "";
+    }
+    setBusy(null);
+    queueSave(pending.current.settings, value);
   }
 
   async function loadModels() {
@@ -98,7 +198,11 @@ export function SettingsDialog({
       if (request.current !== id) return;
       setModels(result.models);
       if (!draft.model && result.models.length === 1)
-        setDraft((current) => ({ ...current, model: result.models[0] }));
+        queueSave(
+          { ...pending.current.settings, model: result.models[0] },
+          pending.current.key,
+          true,
+        );
       setNotice({
         kind: "info",
         text: result.models.length
@@ -141,25 +245,51 @@ export function SettingsDialog({
     }
   }
 
-  async function save() {
-    setBusy("save");
-    setNotice(null);
-    try {
-      const next = await api.save(draft, key);
-      onSaved(next);
-      onOpenChange(false);
-    } catch (error) {
-      setNotice({ kind: "error", text: errorText(error) });
-    } finally {
-      setBusy(null);
+  async function close() {
+    if (closing) return;
+    setClosing(true);
+    if (request.current) {
+      void api.cancelRequest(request.current);
+      request.current = "";
     }
+    setBusy(null);
+    const saved = await flush();
+    if (saved) {
+      if (request.current) {
+        void api.cancelRequest(request.current);
+        request.current = "";
+      }
+      setKey(null);
+      pending.current.key = null;
+      onOpenChange(false);
+    }
+    setClosing(false);
+  }
+
+  function discard() {
+    if (request.current) {
+      void api.cancelRequest(request.current);
+      request.current = "";
+    }
+    clearTimeout(saveTimer.current);
+    pending.current = {
+      settings: snapshot.settings,
+      key: null,
+      revision: savedRevision.current,
+    };
+    setDraft(snapshot.settings);
+    setKey(null);
+    setSaveError("");
+    setSaveState("saved");
+    onOpenChange(false);
   }
 
   return (
     <Dialog
       open={open}
       onOpenChange={(value) => {
-        if (busy !== "save") onOpenChange(value);
+        if (value) onOpenChange(true);
+        else void close();
       }}
     >
       <DialogContent
@@ -200,7 +330,7 @@ export function SettingsDialog({
             {t("Preferences")}
           </button>
         </div>
-        <div className="settings-body">
+        <div className="settings-body" inert={closing}>
           {tab === "connection" ? (
             <section
               role="tabpanel"
@@ -233,16 +363,7 @@ export function SettingsDialog({
                     autoComplete="off"
                     spellCheck={false}
                     value={key ?? ""}
-                    onChange={(e) => {
-                      setKey(e.target.value);
-                      setModels([]);
-                      setNotice(null);
-                      if (request.current) {
-                        void api.cancelRequest(request.current);
-                        request.current = "";
-                        setBusy(null);
-                      }
-                    }}
+                    onChange={(e) => updateKey(e.target.value)}
                     placeholder={
                       snapshot.has_api_key && key === null
                         ? t("Saved securely on this Windows account")
@@ -261,14 +382,7 @@ export function SettingsDialog({
                   <button
                     type="button"
                     className="text-button remove-key"
-                    onClick={() => {
-                      setKey("");
-                      setModels([]);
-                      if (request.current)
-                        void api.cancelRequest(request.current);
-                      request.current = "";
-                      setBusy(null);
-                    }}
+                    onClick={() => updateKey("")}
                   >
                     {t("Remove saved key")}
                   </button>
@@ -423,8 +537,7 @@ export function SettingsDialog({
                     .sort((a, b) => a - b)
                     .map((value) => (
                       <option key={value} value={value}>
-                        {value}
-                        {t("seconds")}
+                        {t("{count} seconds", { count: value })}
                       </option>
                     ))}
                 </select>
@@ -443,8 +556,9 @@ export function SettingsDialog({
                     .sort((a, b) => a - b)
                     .map((value) => (
                       <option key={value} value={value}>
-                        {value}
-                        {t("steps")}
+                        {t(value === 1 ? "{count} step" : "{count} steps", {
+                          count: value,
+                        })}
                       </option>
                     ))}
                 </select>
@@ -485,6 +599,24 @@ export function SettingsDialog({
               </button>
             </div>
           )}
+          {saveError && (
+            <div className="notice notice-error" role="alert">
+              <strong>{t("Changes not saved.")}</strong>
+              <p>{t(saveError)}</p>
+              <div className="settings-error-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void flush()}
+                >
+                  {t("Try again")}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={discard}>
+                  {t("Discard unsaved changes")}
+                </Button>
+              </div>
+            </div>
+          )}
           {snapshot.config_error && (
             <div className="notice notice-error" role="alert">
               {t(snapshot.config_error)}
@@ -500,9 +632,30 @@ export function SettingsDialog({
                 : t("Saved beside the app in config.cfg")}
             </span>
           </div>
-          <Button disabled={!!busy} onClick={() => void save()}>
-            {busy === "save" && <LoaderCircle className="spin" size={16} />}
-            {t("Save settings")}
+          <span
+            className="settings-save-status"
+            role="status"
+            aria-live="polite"
+          >
+            {saveState === "saving" ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : saveState === "saved" ? (
+              <Check size={15} />
+            ) : null}
+            {saveState === "saving"
+              ? t("Saving…")
+              : saveState === "pending"
+                ? t("Changes save automatically")
+                : saveState === "error"
+                  ? t("Changes not saved.")
+                  : t("All changes saved")}
+          </span>
+          <Button
+            variant="secondary"
+            disabled={closing}
+            onClick={() => void close()}
+          >
+            {t("Done")}
           </Button>
         </div>
       </DialogContent>

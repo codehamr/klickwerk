@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 async function connect(page: Page) {
   await page.getByRole("button", { name: "Open settings" }).click();
   await page.getByLabel("Vision model", { exact: true }).fill("qwen3-vl:8b");
-  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
 }
 async function start(page: Page, task = "Draft a welcome note") {
@@ -78,7 +78,7 @@ test("settings order is URL, key, model; model loading waits for model focus", a
   ).toBeVisible();
   await page.getByRole("tab", { name: "Preferences" }).click();
   await expect(page.getByLabel("Reduce motion")).toHaveCount(0);
-  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   expect(
     await page.evaluate(() =>
       localStorage.getItem("klickwerk-preview-settings"),
@@ -90,20 +90,22 @@ test("settings order is URL, key, model; model loading waits for model focus", a
     "http://localhost:1234/v1",
   );
   await page.getByLabel("Server URL").fill("example.org/proxy/v1");
-  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByLabel("Server URL")).toHaveValue(
     "https://example.org/proxy/v1",
   );
 });
 
-test("settings cancel edits, trap focus, and return to the prompt", async ({
+test("settings autosave edits, trap focus, and return to the prompt", async ({
   page,
 }) => {
   await page.goto("/");
   await connect(page);
   await page.getByRole("button", { name: "Open settings" }).click();
-  await page.getByLabel("Vision model", { exact: true }).fill("unsaved-model");
+  await page
+    .getByLabel("Vision model", { exact: true })
+    .fill("autosaved-model");
   for (let i = 0; i < 15; i++) {
     await page.keyboard.press("Tab");
     expect(
@@ -117,7 +119,7 @@ test("settings cancel edits, trap focus, and return to the prompt", async ({
   await expect(page.getByLabel("What would you like me to do?")).toBeFocused();
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByLabel("Vision model", { exact: true })).toHaveValue(
-    "qwen3-vl:8b",
+    "autosaved-model",
   );
 });
 
@@ -442,8 +444,9 @@ test.describe("German desktop", () => {
     await page.getByRole("button", { name: "Einstellungen öffnen" }).click();
     await page.getByRole("tab", { name: "Allgemein" }).click();
     await page.getByLabel("Sprache", { exact: true }).selectOption("en");
-    await page.getByRole("button", { name: "Einstellungen speichern" }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page.getByText("All changes saved")).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(page.getByLabel("What would you like me to do?")).toHaveValue(
       /Frage zuerst nach Startort/,
     );
@@ -455,8 +458,9 @@ test.describe("German desktop", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Preferences" }).click();
     await page.getByLabel("Language", { exact: true }).selectOption("system");
-    await page.getByRole("button", { name: "Save settings" }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
+    await expect(page.getByText("Alle Änderungen gespeichert")).toBeVisible();
+    await page.keyboard.press("Escape");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   });
 });
@@ -481,7 +485,7 @@ test("light, dark, narrow, and handoff layouts render accessibly without overflo
   await page.getByLabel("Vision model", { exact: true }).fill("qwen3-vl:8b");
   await page.getByRole("tab", { name: "Preferences" }).click();
   await page.getByLabel("Appearance").selectOption("dark");
-  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({
@@ -562,3 +566,203 @@ test("prepared workflows expire when a session is reset or its workflow is delet
   expect(deletion).toBe("expired");
   expect(await savedWorkflows(page)).toEqual([]);
 });
+
+test("autosave coalesces typing and flushes newer edits behind a slow save on close", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const save = api.save;
+    let inFlight = 0;
+    let peak = 0;
+    const writes: { model: string; hasKey: boolean; baseUrl: string }[] = [];
+    Object.assign(window, { settingsSaveStats: () => ({ peak, writes }) });
+    api.save = async (
+      settings: { model: string; base_url: string },
+      key: string | null,
+    ) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      writes.push({
+        model: settings.model,
+        hasKey: !!key,
+        baseUrl: settings.base_url,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      try {
+        return await save(settings, key);
+      } finally {
+        inFlight--;
+      }
+    };
+  });
+  const stats = () =>
+    page.evaluate(() =>
+      (
+        window as typeof window & {
+          settingsSaveStats: () => {
+            peak: number;
+            writes: { model: string; hasKey: boolean; baseUrl: string }[];
+          };
+        }
+      ).settingsSaveStats(),
+    );
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page
+    .getByLabel("Vision model", { exact: true })
+    .fill("temporary-model");
+  await page.getByLabel("Vision model", { exact: true }).fill("saved-model");
+  await page.locator("#api-key").fill("fixture-key");
+  await expect.poll(async () => (await stats()).writes.length).toBe(1);
+  expect((await stats()).writes[0]).toMatchObject({
+    model: "saved-model",
+    hasKey: true,
+  });
+  await page.getByLabel("Server URL").fill("example.org/v1");
+  await page.getByLabel("Vision model", { exact: true }).fill("latest-model");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("klickwerk-preview-settings") ?? "{}"),
+  );
+  expect(saved).toMatchObject({
+    model: "latest-model",
+    base_url: "https://example.org/v1",
+    api_key: "",
+  });
+  expect((await stats()).peak).toBe(1);
+  expect((await stats()).writes.at(-1)).toMatchObject({
+    model: "latest-model",
+    hasKey: false,
+  });
+});
+
+test("autosave failures preserve the draft and allow retry or discarding only unsaved changes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const save = api.save;
+    let fail = true;
+    window.addEventListener("allow-settings-saves", () => {
+      fail = false;
+    });
+    api.save = (...args: unknown[]) =>
+      fail ? Promise.reject(new Error("Disk is full.")) : save(...args);
+  });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page
+    .getByLabel("Vision model", { exact: true })
+    .fill("keep-this-model");
+  await expect(page.getByText("Disk is full.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByLabel("Vision model", { exact: true })).toHaveValue(
+    "keep-this-model",
+  );
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("allow-settings-saves")),
+  );
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.getByText("All changes saved")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("klickwerk-preview-settings") ?? "{}")
+          .model,
+    ),
+  ).toBe("keep-this-model");
+  await page.getByLabel("Server URL").fill("https://");
+  await expect(page.getByText("Enter a valid server address.")).toBeVisible();
+  await page.getByRole("button", { name: "Discard unsaved changes" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByLabel("Vision model", { exact: true })).toHaveValue(
+    "keep-this-model",
+  );
+  await expect(page.getByLabel("Server URL")).toHaveValue(
+    "http://localhost:11434/v1",
+  );
+});
+
+for (const locale of ["en-US", "de-DE"]) {
+  test.describe(`autosave preferences in ${locale}`, () => {
+    test.use({ locale });
+    test("numbers and units have spaces and preferences persist without closing", async ({
+      page,
+    }) => {
+      const german = locale === "de-DE";
+      await page.goto("/");
+      await page
+        .getByRole("button", {
+          name: german ? "Einstellungen öffnen" : "Open settings",
+        })
+        .click();
+      await page
+        .getByRole("tab", { name: german ? "Allgemein" : "Preferences" })
+        .click();
+      const timeout = page.getByLabel(
+        german ? "Antwortzeitlimit" : "Response timeout",
+      );
+      const limit = page.getByLabel(german ? "Schrittlimit" : "Task limit");
+      const seconds = german ? "Sekunden" : "seconds";
+      const steps = german ? "Schritte" : "steps";
+      await expect(timeout.locator("option")).toHaveText(
+        [30, 60, 120, 180, 300].map((count) => `${count} ${seconds}`),
+      );
+      await expect(limit.locator("option")).toHaveText(
+        [10, 25, 50, 100].map((count) => `${count} ${steps}`),
+      );
+      await timeout.selectOption("180");
+      await limit.selectOption("25");
+      await expect(
+        page.getByText(
+          german ? "Alle Änderungen gespeichert" : "All changes saved",
+        ),
+      ).toBeVisible();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: german ? "Einstellungen speichern" : "Save settings",
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      expect(
+        await page.evaluate(() =>
+          JSON.parse(
+            localStorage.getItem("klickwerk-preview-settings") ?? "{}",
+          ),
+        ),
+      ).toMatchObject({ request_timeout_seconds: 180, max_steps: 25 });
+      await page.reload();
+      await page
+        .getByRole("button", {
+          name: german ? "Einstellungen öffnen" : "Open settings",
+        })
+        .click();
+      await page
+        .getByRole("tab", { name: german ? "Allgemein" : "Preferences" })
+        .click();
+      await expect(timeout).toHaveValue("180");
+      await expect(limit).toHaveValue("25");
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(
+        await page
+          .getByRole("dialog")
+          .evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth),
+      ).toBe(true);
+      mkdirSync("build/visual", { recursive: true });
+      await page.screenshot({
+        path: `build/visual/settings-autosave-${locale}-narrow.png`,
+        animations: "disabled",
+      });
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    });
+  });
+}
