@@ -16,6 +16,10 @@ do not establish physical hardware or WebView2 acceptance.
   selections save immediately, and closing finishes pending changes. A read-only
   folder must leave a visible error with retry and discard options. Check spaces
   between numbers and units in response timeout and task limit in both languages.
+- Confirm there is no Done button. Close via ×, Escape and an outside click.
+  In an open menu, Escape closes only that menu. Test preference selection with
+  arrow keys and Enter, selected markers, model filtering and custom model IDs,
+  long model names, and keyboard focus remaining within Settings.
 - Verify existing configurations with legacy `provider` values still load and
   that saving removes that unused field. API keys use DPAPI and do not appear in
   public snapshots; changing server origin clears the old key.
@@ -91,3 +95,36 @@ physical hardware still needs the manual checks above.
 - Have a scripted provider repeat text or a click without any visible change.
   The app must ask the user before duplicating the last input. This is conservative
   detection, not proof that an arbitrary application has finished all background work.
+
+## History export
+
+- Export JSON after success, failure, takeover and a question, before and after
+  saving the workflow. Verify actions, every correction and attempt, prior outcomes,
+  per-attempt settings/warm starts, the current refinement and the associated workflow.
+- Check the native Save As dialog in DE/EN, cancellation, Unicode paths, existing
+  files and read-only folders. Cancellation or failure must preserve the session;
+  failed replacement must preserve the previous file. The report is not uploaded.
+- Confirm New task/deletion removes the old export action, and API credentials are
+  absent from the report's settings. Recent screenshots are bounded and may
+  contain visible personal content; raw model responses are not retained.
+
+## Foreground handoff and target diagnostics
+
+- Repeat takeover, model questions, success and failure while the main window is
+  minimized, behind a normal app and behind a maximized/full-screen app. Check that
+  it becomes visible in front and the refinement field accepts typing. Confirm the
+  window does not stay always-on-top after handoff. Inspect the attempt's `handoff`
+  result; record any OS denial instead of treating taskbar flashing as success.
+- Reproduce the Task Manager task: Ctrl+Shift+Escape, filter `chr`, sort Memory
+  descending, identify the first matching row and its displayed value. Check the
+  foreground metadata, search result, sort indicator and image/desktop mapping.
+- Test a target at higher integrity than klickwerk: no input should be sent, and
+  the UI should explain the privilege mismatch with Continue/refinement available.
+  Complete the blocked step manually if necessary. An equally elevated sender and
+  fixture target must remain eligible; own windows must still be rejected.
+- Export after a refusal and after refinement. Inspect rejection codes, both
+  integrity levels, window title/class/bounds, frame references, model and input
+  timing, and handoff verification. Decode a `jpeg_base64` entry as a JPEG.
+- Run beyond 12 observations: all history must remain, while older image evidence
+  is evicted and `frames_omitted` increases. New task/deletion must clear evidence.
+  Verify raw images are absent from workflow files and UI progress snapshots.

@@ -78,6 +78,54 @@ export interface Run {
   elapsed_ms: number;
   interrupted: boolean;
   workflow_id: string | null;
+  started_at: number;
+  attempts: Attempt[];
+}
+export interface Attempt {
+  number: number;
+  started_at: number;
+  finished_at: number | null;
+  first_step_id: number;
+  last_step_id: number | null;
+  user_reply: string | null;
+  warm_start_prompt: string;
+  phase: Phase;
+  message: string;
+  result: string;
+  question: string;
+  settings: Pick<
+    Settings,
+    | "base_url"
+    | "model"
+    | "screenshot_max_edge"
+    | "request_timeout_seconds"
+    | "max_steps"
+  > & { language: string };
+}
+export interface SessionExport {
+  schema_version: 2;
+  exported_at: number;
+  app: { name: string; version: string; platform: Snapshot["platform"] };
+  run: Run;
+  workflow: Workflow | null;
+  warm_start_prompt: string;
+  unsent_refinement: string | null;
+  evidence: {
+    frames_observed: number;
+    frames_omitted: number;
+    frames: {
+      frame: Record<string, number>;
+      observed_at: number;
+      mime: string;
+      jpeg_base64: string;
+    }[];
+  };
+  coverage: {
+    history: "all_recorded_steps_and_attempts";
+    screenshots:
+      "recent_frames_bounded_12_and_8_mib_base64" | "unavailable_in_preview";
+    raw_model_responses: "not_retained";
+  };
 }
 export interface Snapshot {
   settings: Settings;
@@ -112,6 +160,8 @@ export const emptyRun: Run = {
   elapsed_ms: 0,
   interrupted: false,
   workflow_id: null,
+  started_at: 0,
+  attempts: [],
 };
 export const defaultSettings: Settings = {
   version: 1,

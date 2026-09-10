@@ -7,7 +7,9 @@ import {
   type Snapshot,
   type Step,
   type Workflow,
+  type SessionExport,
 } from "./types";
+import { version } from "../../package.json";
 import { t } from "./i18n";
 import { normalizeServerUrl } from "./utils";
 
@@ -97,6 +99,19 @@ function persist(next: Workflow[]) {
   workflows = next;
   emit();
 }
+function finishAttempt() {
+  const run = state.run;
+  const attempt = run.attempts.at(-1);
+  if (!attempt) return;
+  attempt.finished_at = Date.now();
+  const last = run.steps.at(-1);
+  attempt.last_step_id =
+    last && last.id >= attempt.first_step_id ? last.id : null;
+  attempt.phase = run.phase;
+  attempt.message = run.message;
+  attempt.result = run.result;
+  attempt.question = run.question;
+}
 export async function previewCall<T>(
   command: string,
   args: Record<string, unknown>,
@@ -132,6 +147,7 @@ export async function previewCall<T>(
         throw new Error("A task is already running.");
       const previous = state.run;
       const resume = args.resumeRunId != null;
+      const firstStepId = resume ? previous.steps.length + 1 : 1;
       if (
         resume &&
         (args.resumeRunId !== previous.id ||
@@ -177,9 +193,37 @@ export async function previewCall<T>(
         steps: resume ? previous.steps : [],
         elapsed_ms: resume ? previous.elapsed_ms : 0,
         phase: "countdown",
+        started_at: resume ? previous.started_at : Date.now(),
+        attempts: resume ? previous.attempts : [],
         message:
           "Starting in 2 seconds. Move your mouse or press any key to interrupt.",
       };
+      const currentSettings = state.settings;
+      state.run.attempts.push({
+        number: state.run.attempts.length + 1,
+        started_at: Date.now(),
+        finished_at: null,
+        first_step_id: firstStepId,
+        last_step_id: null,
+        user_reply: resume ? String(args.reply ?? "") : null,
+        warm_start_prompt: memory,
+        phase: "running",
+        message: "",
+        result: "",
+        question: "",
+        settings: {
+          base_url: currentSettings.base_url,
+          model: currentSettings.model,
+          screenshot_max_edge: currentSettings.screenshot_max_edge,
+          request_timeout_seconds: currentSettings.request_timeout_seconds,
+          max_steps: currentSettings.max_steps,
+          language:
+            currentSettings.language === "de" ||
+            (currentSettings.language === "system" && state.locale === "de")
+              ? "German"
+              : "English",
+        },
+      });
       emit();
       later(() => {
         state.run.phase = "running";
@@ -227,6 +271,7 @@ export async function previewCall<T>(
                 "Preview complete. Your desktop has not been changed.";
             }
             state.run.elapsed_ms += 900;
+            finishAttempt();
           }, 900);
         }, 700);
       }, 2000);
@@ -246,8 +291,51 @@ export async function previewCall<T>(
           "You took over with mouse or keyboard input. The last action may need correcting.",
         ),
       );
+      finishAttempt();
       emit();
       return undefined as T;
+    case "export_session": {
+      if (
+        state.run.id !== args.runId ||
+        !["done", "error", "stopped", "waiting"].includes(state.run.phase)
+      )
+        throw new Error("This session is no longer available to export.");
+      const refinement =
+        args.refinement == null ? null : String(args.refinement);
+      if (refinement && new TextEncoder().encode(refinement).length > 16384)
+        throw new Error("The refinement is too long to export.");
+      const report: SessionExport = {
+        schema_version: 2,
+        evidence: { frames_observed: 0, frames_omitted: 0, frames: [] },
+        exported_at: Date.now(),
+        app: { name: "klickwerk", version, platform: "preview" },
+        run: structuredClone(state.run),
+        workflow: structuredClone(
+          workflows.find((w) => w.id === state.run.workflow_id) ?? null,
+        ),
+        warm_start_prompt: memory,
+        unsent_refinement: refinement?.trim() ? refinement : null,
+        coverage: {
+          history: "all_recorded_steps_and_attempts",
+          screenshots: "unavailable_in_preview",
+          raw_model_responses: "not_retained",
+        },
+      };
+      const filename = `klickwerk-session-${report.run.id}-${report.exported_at}.json`;
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(report, null, 2) + "\n"], {
+          type: "application/json",
+        }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return filename as T;
+    }
     case "get_workflow": {
       const item = workflows.find((w) => w.id === args.id);
       if (!item) throw new Error("This workflow is no longer available.");

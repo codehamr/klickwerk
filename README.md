@@ -20,11 +20,12 @@ tools; users do not install them.
    `localhost:11434` work directly; standard API paths are completed automatically.
    Focusing the model field loads models with the current key. Manual model IDs also work.
 4. **Test connection** checks image understanding using a generated shape image.
-   Settings save automatically; **Done** returns to your task.
+   Settings save automatically. Close with **×**, **Escape**, or a click outside;
+   pending changes are saved before returning to your task.
 5. Enter a task and click **Let’s do it** or press **Ctrl + Enter**. A short notice
    explains that control starts in two seconds. The window then minimizes.
 6. Move your mouse or press any key to interrupt from any application. Input stops,
-   the window is restored and requests focus, and a clear paused message returns
+   the window is restored, raised and activated, and a clear paused message returns
    control to you. Choose **Continue** as is, or enter a correction and choose
    **Refine & continue**. Success, questions, and failures also return control;
    successful tasks remain available for refinement until you choose **New task**.
@@ -67,16 +68,30 @@ shows when all changes are saved; failures keep your edits available for retry o
 explicit discard. Replacing a malformed config first creates a
 `config.invalid-<pid>.cfg` backup.
 
+Preference menus mark the current selection and support keyboard navigation.
+The model menu filters as you type and accepts exact IDs from compatible servers.
+Escape closes an open menu first, then Settings.
+
 The app sends desktop screenshots, task text, action history, and corrections to
 the **selected model server** while a task runs. Preparing a workflow sends its
 text history to that same server without capturing a screenshot. Learning means
 reusing saved instructions and corrections; it does not retrain the model.
 
+After a task finishes, fails, pauses or asks a question, **Export history (JSON)**
+lets you save its recorded actions, corrections, attempts and outcomes for analysis.
+The report also includes per-attempt model settings and warm-start instructions,
+the current workflow, and the refinement field's current text. Export before
+starting a fresh session; the app does not retain old session histories. See the
+[report format and coverage](docs/session-export.md).
+
 Action history stays in memory for the current session, including after a save so
 that you can continue refining. Only the consolidated prompt, name, ID and update
 time are written to `workflows.json` beside the EXE. Old workflow memory is merged
 into its prompt on load; the next library write removes legacy raw history.
-Screenshots and audio are never saved. **New task** and workflow deletion discard
+Explicit JSON exports are separate files and include recent decision screenshots
+(up to 12 frames, bounded to 8 MiB of image data), window details and timing.
+Screenshots otherwise remain temporary in RAM; audio is not saved.
+**New task** and workflow deletion discard
 the temporary session. There is no persistent list of previous tasks.
 
 Before each model observation, the controller waits at least 700 ms and requires

@@ -54,6 +54,11 @@ export const api = {
       workflowId: workflowId ?? null,
     }),
   getWorkflow: (id: string) => call<Workflow>("get_workflow", { id }),
+  exportSession: (runId: number, refinement: string) =>
+    call<string | null>("export_session", {
+      runId,
+      refinement: refinement || null,
+    }),
   prepareWorkflow: (
     learning: Learning,
     requestId: string,

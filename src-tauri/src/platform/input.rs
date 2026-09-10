@@ -1,6 +1,7 @@
 use super::{Handle, default_desktop, wide};
 use crate::{
     action::{Action, Button, Modifier, key_code},
+    diagnostics::{InputFailure, TargetInfo},
     guard::Frame,
 };
 use std::{
@@ -10,7 +11,6 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    Security::*,
     System::{Memory::*, Threading::*},
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
@@ -251,47 +251,53 @@ fn movement(frame: &Frame, x: i32, y: i32) -> Result<INPUT, String> {
     ))
 }
 
-fn allowed_window(window: HWND, parent: u32) -> bool {
-    unsafe {
-        if window.is_null() {
-            return false;
-        }
-        let root = GetAncestor(window, GA_ROOT);
-        let mut pid = 0;
-        GetWindowThreadProcessId(root, &mut pid);
-        if pid == 0 || pid == parent || pid == GetCurrentProcessId() {
-            return false;
-        }
-        let process = Handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid));
-        if process.0.is_null() {
-            return false;
-        }
-        let mut token = std::ptr::null_mut();
-        if OpenProcessToken(process.0, TOKEN_QUERY, &mut token) == 0 {
-            return false;
-        }
-        let token = Handle(token);
-        let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
-        let mut length = 0;
-        GetTokenInformation(
-            token.0,
-            TokenElevation,
-            &mut elevation as *mut _ as _,
-            size_of::<TOKEN_ELEVATION>() as u32,
-            &mut length,
-        ) != 0
-            && elevation.TokenIsElevated == 0
+fn target(window: HWND, parent: u32) -> Result<TargetInfo, InputFailure> {
+    let info = super::window::inspect(window as usize, parent);
+    if info.input_block.is_some() {
+        Err(InputFailure::target(info))
+    } else {
+        Ok(info)
     }
 }
 
-fn point_allowed(frame: &Frame, x: i32, y: i32, parent: u32) -> bool {
-    let Some((x, y)) = frame.map(x, y) else {
-        return false;
-    };
+fn point_target(frame: &Frame, x: i32, y: i32, parent: u32) -> Result<TargetInfo, InputFailure> {
+    let (x, y) = frame.map(x, y).ok_or_else(|| {
+        InputFailure::new(
+            "invalid_coordinates",
+            "The pointer target is outside the captured image.",
+        )
+    })?;
     unsafe {
-        !MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL).is_null()
-            && allowed_window(WindowFromPoint(POINT { x, y }), parent)
+        if MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL).is_null() {
+            return Err(InputFailure::new(
+                "monitor_gap",
+                "The pointer target is outside a physical monitor.",
+            ));
+        }
+        target(WindowFromPoint(POINT { x, y }), parent)
     }
+}
+
+pub fn inspect_action(
+    frame: &Frame,
+    action: &Action,
+    parent: u32,
+) -> Result<Vec<TargetInfo>, InputFailure> {
+    let mut targets = Vec::new();
+    for (x, y) in action.points() {
+        targets.push(point_target(frame, x, y, parent)?);
+    }
+    if matches!(action, Action::Key { .. } | Action::Text { .. }) {
+        let current = unsafe { GetForegroundWindow() };
+        if current as usize != frame.foreground {
+            return Err(InputFailure::new(
+                "foreground_changed",
+                "The foreground window changed. Observe again before sending input.",
+            ));
+        }
+        targets.push(target(current, parent)?);
+    }
+    Ok(targets)
 }
 
 fn path_point_allowed(frame: &Frame, x: i32, y: i32, parent: u32) -> bool {
@@ -327,11 +333,7 @@ impl Plan {
         if frame.width == 0 || frame.height == 0 || frame.width > 32768 || frame.height > 32768 {
             return Err("Invalid desktop dimensions.".into());
         }
-        for (x, y) in action.points() {
-            if !point_allowed(&frame, x, y, parent) {
-                return Err("The target is protected, elevated, or belongs to klickwerk.".into());
-            }
-        }
+        inspect_action(&frame, &action, parent).map_err(|failure| failure.message)?;
         let focus = if matches!(action, Action::Key { .. } | Action::Text { .. }) {
             Some(frame.foreground)
         } else {
@@ -483,27 +485,41 @@ impl Plan {
             parent,
         })
     }
-    pub fn target_valid(&self, point: Option<(i32, i32)>) -> bool {
-        if !default_desktop()
-            || super::capture::layout()
-                != (
-                    self.frame.left,
-                    self.frame.top,
-                    self.frame.width,
-                    self.frame.height,
-                )
+    pub fn target_valid(&self, point: Option<(i32, i32)>) -> Result<(), InputFailure> {
+        if !default_desktop() {
+            return Err(InputFailure::new(
+                "input_desktop_changed",
+                "Windows switched to another input desktop. Return to the normal desktop, then continue.",
+            ));
+        }
+        if super::capture::layout()
+            != (
+                self.frame.left,
+                self.frame.top,
+                self.frame.width,
+                self.frame.height,
+            )
         {
-            return false;
+            return Err(InputFailure::new(
+                "display_layout_changed",
+                "The display layout changed. Observe the desktop again before continuing.",
+            ));
         }
         if let Some(focus) = self.focus {
             let current = unsafe { GetForegroundWindow() };
             if current as usize != focus
-                || !allowed_window(current, self.parent)
                 || self.focused_control != Some(super::capture::focused_control())
             {
-                return false;
+                return Err(InputFailure::new(
+                    "keyboard_focus_changed",
+                    "The focused window or text field changed during input. Some text may already have arrived. Check it before continuing.",
+                ));
             }
+            target(current, self.parent)?;
         }
-        point.is_none_or(|(x, y)| point_allowed(&self.frame, x, y, self.parent))
+        if let Some((x, y)) = point {
+            point_target(&self.frame, x, y, self.parent)?;
+        }
+        Ok(())
     }
 }

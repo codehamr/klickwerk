@@ -60,7 +60,7 @@ Typing requires the same foreground window, focused control, and visually unchan
 content after model inference. Its focus is rechecked before each Unicode scalar.
 A moved target is recorded as skipped and triggers a fresh observation, with a
 question after three consecutive changes. Own windows, monitor gaps, protected
-desktops, and elevated targets are refused. These checks cannot prove that a model
+desktops, and targets above the sender’s integrity level are refused. Equal-integrity elevated windows are eligible; elevation alone is not a reason to refuse input. These checks cannot prove that a model
 understood the visible UI correctly.
 
 Keys accept case-insensitive names, including Windows shortcuts. Literal text uses
@@ -89,17 +89,21 @@ acknowledged; the next screenshot verifies the result. A takeover records that t
 latest action may be mistaken or partial, without inventing a reason. Input is not
 recorded after takeover; the user supplies explicit refinements in the prompt.
 
-Each model request includes the saved start prompt, all current user corrections,
+Each model request includes native foreground identity and input permissions, the saved start prompt, all current user corrections,
 and a bounded tail of actual actions. Corrections are retained separately so
 truncation cannot remove them. The model must prefer newer corrections, inspect the
 current screenshot, and relocate targets. Previous raw histories are never replayed.
 
 One decision is requested per observation. Questions and completion end desktop
 control before accepting further input. After broker teardown releases held input,
-the main window is restored, shown and focused. If Windows refuses foreground
-activation, a taskbar attention request provides a fallback. See
-[Tauri window focus](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindow.html#method.set_focus)
-and [Windows foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
+the main window is restored, raised and activated on its UI thread. A temporary
+z-order change restores the previous topmost flag immediately. If needed, the
+responsive foreground thread's input queue is attached for activation and detached
+before returning. No synthetic Alt keys or global foreground policy changes are
+used. Every attempt records actual foreground, visibility and keyboard focus;
+taskbar attention remains a fallback when Windows refuses activation. See
+[Windows foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+and [AttachThreadInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-attachthreadinput).
 
 Every workflow save first sends a text-only finalization request to the selected
 model, including when editing a saved prompt or when no correction or success is
@@ -121,8 +125,8 @@ memory is merged into its prompt on load and legacy histories are discarded on t
 next atomic library write. Current-session history remains in RAM until a fresh
 session replaces it, allowing further refinement after saving. The library supports
 100 workflows and 16 MiB total; prompts are bounded to 32 KiB. A damaged library is
-preserved and surfaced as an error. Screenshots, raw user keystrokes and audio are
-not recorded. Learning reuses instructions; it does not update model weights.
+preserved and surfaced as an error. Recent screenshots are retained only in bounded
+session evidence for explicit JSON export; raw user keystrokes and audio are not recorded. Learning reuses instructions; it does not update model weights.
 
 ## Connections, settings, and speech
 
@@ -149,6 +153,21 @@ unsaved changes. Save responses update application preferences without replacing
 the text being edited. Response timeout and step limit labels translate the number
 and unit together, including their separating space.
 
+The Settings header explains autosave; only the close control is needed to leave.
+Preference menus use [Radix Select](https://www.radix-ui.com/primitives/docs/components/select)
+for selection, focus and keyboard handling. The editable model combobox keeps focus
+on its input while a positioned list filters model IDs. Its dismissal layer nests
+inside the Settings dialog, so Escape closes the menu first. Model discovery may
+finish while the user types, but a late result never replaces a nonempty model ID.
+
+`session.rs` holds the current run view and versioned JSON report. Each controller
+attempt records its start/end, user reply, settings without credentials and the
+warm-start prompt used for that attempt. Export clones the inactive session under
+the mutation lock, checks its ID, and includes the complete recorded step list and
+current refinement separately. A native Common Item Save dialog runs in its own
+COM apartment; writing uses a temporary file and atomic replacement. Export never
+invokes a model or changes workflow storage. See [session export](session-export.md).
+
 SAPI dictation runs in its own COM apartment with the default recognizer and audio
 input. It can fill a task or correction, is bounded to two minutes, and publishes
 interim/final text. Missing audio support leaves typed prompts available.
@@ -161,3 +180,13 @@ suggested tasks have explicit English/German versions. Model-generated descripti
 questions and summaries use the selected UI language. Changing language preserves
 user-entered prompts. Legacy `reduce_motion` is accepted on read but no longer used
 or written; the preference and motion overrides have been removed.
+
+## Diagnostic evidence
+
+Session export schema 2 preserves all recorded steps and attempts, including
+structured target refusals and handoff verification. A separate shared allocation
+holds the latest 12 decision screenshots within 8 MiB of base64 data, with explicit
+omission counts. It is excluded from UI snapshots and workflow consolidation.
+Metadata includes physical/image geometry, model latency, validation/input timing,
+window/process identity and integrity levels. Failed model requests retain their
+observation and a no-input system step. See [session export](session-export.md).

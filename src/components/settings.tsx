@@ -2,7 +2,6 @@ import { useI18n } from "../lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
-  ChevronDown,
   Eye,
   EyeOff,
   FolderLock,
@@ -17,6 +16,8 @@ import type { Settings as SettingsData, Snapshot } from "../lib/types";
 import { errorText, normalizeServerUrl } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
+import { Select } from "./ui/select";
+import { ModelCombobox } from "./ui/model-combobox";
 
 interface Props {
   snapshot: Snapshot;
@@ -151,11 +152,12 @@ export function SettingsDialog({
     field: K,
     value: SettingsData[K],
   ) {
-    if (request.current) {
+    const keepModelRequest = field === "model" && busy === "models";
+    if (request.current && !keepModelRequest) {
       void api.cancelRequest(request.current);
       request.current = "";
     }
-    setBusy(null);
+    if (!keepModelRequest) setBusy(null);
     setNotice(null);
     let nextKey = pending.current.key;
     if (field === "base_url") {
@@ -197,7 +199,7 @@ export function SettingsDialog({
       const result = await api.models(draft, key, id);
       if (request.current !== id) return;
       setModels(result.models);
-      if (!draft.model && result.models.length === 1)
+      if (!pending.current.settings.model && result.models.length === 1)
         queueSave(
           { ...pending.current.settings, model: result.models[0] },
           pending.current.key,
@@ -293,10 +295,9 @@ export function SettingsDialog({
       }}
     >
       <DialogContent
-        title={t("Your connection")}
-        description={t(
-          "Enter your server URL, add a key if needed, then choose a vision model.",
-        )}
+        title={t("Settings")}
+        description={t("Make it yours. Changes save automatically.")}
+        closeLabel="Close settings"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           returnFocus();
@@ -404,28 +405,17 @@ export function SettingsDialog({
                     {t("Load models")}
                   </button>
                 </div>
-                <div className="input-with-icon">
-                  <input
-                    id="model-id"
-                    list="available-models"
-                    onFocus={() => {
-                      if (!busy && !models.length && draft.base_url.trim())
-                        void loadModels();
-                    }}
-                    spellCheck={false}
-                    autoComplete="off"
-                    value={draft.model}
-                    onChange={(e) => update("model", e.target.value)}
-                    placeholder={t("Choose or enter a model ID")}
-                  />
-                  <ChevronDown size={16} />
-                </div>
-                <datalist id="available-models">
-                  {models.map((model) => (
-                    <option key={model} value={model} />
-                  ))}
-                </datalist>
-                <p className="field-hint">
+                <ModelCombobox
+                  value={draft.model}
+                  models={models}
+                  loading={busy === "models"}
+                  onValueChange={(value) => update("model", value)}
+                  onRequestModels={() => {
+                    if (!busy && !models.length && draft.base_url.trim())
+                      void loadModels();
+                  }}
+                />
+                <p className="field-hint" id="model-hint">
                   {t(
                     "Choose a model that can understand images. Exact model IDs also work.",
                   )}
@@ -460,71 +450,104 @@ export function SettingsDialog({
             >
               <div className="preference-row">
                 <div>
-                  <label htmlFor="language">{t("Language")}</label>
-                  <p>{t("Use your desktop language or choose your own.")}</p>
+                  <label htmlFor="language" id="language-label">
+                    {t("Language")}
+                  </label>
+                  <p id="language-hint">
+                    {t("Use your desktop language or choose your own.")}
+                  </p>
                 </div>
-                <select
+                <Select
                   id="language"
                   value={draft.language}
-                  onChange={(e) =>
-                    update(
-                      "language",
-                      e.target.value as SettingsData["language"],
-                    )
+                  onValueChange={(value) =>
+                    update("language", value as SettingsData["language"])
                   }
-                >
-                  <option value="system">{t("Automatic")}</option>
-                  <option value="de">{t("Deutsch")}</option>
-                  <option value="en">{t("English")}</option>
-                </select>
+                  options={[
+                    {
+                      value: "system",
+                      label: t("Automatic"),
+                      description: t("Follows your desktop language"),
+                    },
+                    { value: "de", label: t("Deutsch") },
+                    { value: "en", label: t("English") },
+                  ]}
+                />
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="theme">{t("Appearance")}</label>
-                  <p>{t("Match your workspace.")}</p>
+                  <label htmlFor="theme" id="theme-label">
+                    {t("Appearance")}
+                  </label>
+                  <p id="theme-hint">{t("Match your workspace.")}</p>
                 </div>
-                <select
+                <Select
                   id="theme"
                   value={draft.theme}
-                  onChange={(e) =>
-                    update("theme", e.target.value as SettingsData["theme"])
+                  onValueChange={(value) =>
+                    update("theme", value as SettingsData["theme"])
                   }
-                >
-                  <option value="system">{t("System")}</option>
-                  <option value="light">{t("Light")}</option>
-                  <option value="dark">{t("Dark")}</option>
-                </select>
+                  options={[
+                    {
+                      value: "system",
+                      label: t("System"),
+                      description: t("Follows your desktop appearance"),
+                    },
+                    { value: "light", label: t("Light") },
+                    { value: "dark", label: t("Dark") },
+                  ]}
+                />
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="detail">{t("Screen detail")}</label>
-                  <p>{t("More detail sends larger images.")}</p>
+                  <label htmlFor="detail" id="detail-label">
+                    {t("Screen detail")}
+                  </label>
+                  <p id="detail-hint">
+                    {t("More detail sends larger images.")}
+                  </p>
                 </div>
-                <select
+                <Select
                   id="detail"
-                  value={draft.screenshot_max_edge}
-                  onChange={(e) =>
-                    update("screenshot_max_edge", Number(e.target.value))
+                  value={String(draft.screenshot_max_edge)}
+                  onValueChange={(value) =>
+                    update("screenshot_max_edge", Number(value))
                   }
-                >
-                  <option value="960">{t("Fast")}</option>
-                  <option value="1280">{t("Balanced")}</option>
-                  <option value="1920">{t("Detailed")}</option>
-                </select>
+                  options={[
+                    {
+                      value: "960",
+                      label: t("Fast"),
+                      description: t("Smaller images, faster responses"),
+                    },
+                    {
+                      value: "1280",
+                      label: t("Balanced"),
+                      description: t("Best for most tasks"),
+                    },
+                    {
+                      value: "1920",
+                      label: t("Detailed"),
+                      description: t("Sharper text and small controls"),
+                    },
+                  ]}
+                />
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="timeout">{t("Response timeout")}</label>
-                  <p>{t("Time allowed for each model response.")}</p>
+                  <label htmlFor="timeout" id="timeout-label">
+                    {t("Response timeout")}
+                  </label>
+                  <p id="timeout-hint">
+                    {t("Time allowed for each model response.")}
+                  </p>
                 </div>
-                <select
+                <Select
                   id="timeout"
-                  value={draft.request_timeout_seconds}
-                  onChange={(e) =>
-                    update("request_timeout_seconds", Number(e.target.value))
+                  value={String(draft.request_timeout_seconds)}
+                  onValueChange={(value) =>
+                    update("request_timeout_seconds", Number(value))
                   }
-                >
-                  {[
+                  options={[
                     ...new Set([
                       30,
                       60,
@@ -535,37 +558,38 @@ export function SettingsDialog({
                     ]),
                   ]
                     .sort((a, b) => a - b)
-                    .map((value) => (
-                      <option key={value} value={value}>
-                        {t("{count} seconds", { count: value })}
-                      </option>
-                    ))}
-                </select>
+                    .map((value) => ({
+                      value: String(value),
+                      label: t("{count} seconds", { count: value }),
+                    }))}
+                />
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="max-steps">{t("Task limit")}</label>
-                  <p>{t("Stops automatically after this many steps.")}</p>
+                  <label htmlFor="max-steps" id="max-steps-label">
+                    {t("Task limit")}
+                  </label>
+                  <p id="max-steps-hint">
+                    {t("Stops automatically after this many steps.")}
+                  </p>
                 </div>
-                <select
+                <Select
                   id="max-steps"
-                  value={draft.max_steps}
-                  onChange={(e) => update("max_steps", Number(e.target.value))}
-                >
-                  {[...new Set([10, 25, 50, 100, draft.max_steps])]
+                  value={String(draft.max_steps)}
+                  onValueChange={(value) => update("max_steps", Number(value))}
+                  options={[...new Set([10, 25, 50, 100, draft.max_steps])]
                     .sort((a, b) => a - b)
-                    .map((value) => (
-                      <option key={value} value={value}>
-                        {t(value === 1 ? "{count} step" : "{count} steps", {
-                          count: value,
-                        })}
-                      </option>
-                    ))}
-                </select>
+                    .map((value) => ({
+                      value: String(value),
+                      label: t(value === 1 ? "{count} step" : "{count} steps", {
+                        count: value,
+                      }),
+                    }))}
+                />
               </div>
             </section>
           )}
-          {notice && (
+          {notice && tab === "connection" && (
             <div
               className={`notice notice-${notice.kind}`}
               role={notice.kind === "error" ? "alert" : "status"}
@@ -584,7 +608,7 @@ export function SettingsDialog({
               )}
             </div>
           )}
-          {busy === "test" && (
+          {busy === "test" && tab === "connection" && (
             <div className="notice notice-info" role="status">
               {t("Checking image understanding…")}{" "}
               <button
@@ -650,13 +674,6 @@ export function SettingsDialog({
                   ? t("Changes not saved.")
                   : t("All changes saved")}
           </span>
-          <Button
-            variant="secondary"
-            disabled={closing}
-            onClick={() => void close()}
-          >
-            {t("Done")}
-          </Button>
         </div>
       </DialogContent>
     </Dialog>

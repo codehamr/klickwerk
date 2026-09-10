@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  Download,
   Pause,
   CircleAlert,
   Trash2,
@@ -38,6 +39,7 @@ export function App() {
   const [refinement, setRefinement] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState("");
   const [savedNotice, setSavedNotice] = useState("");
   const [mic, setMic] = useState(false);
@@ -208,6 +210,24 @@ export function App() {
       correction: refinement.trim(),
       name: snapshot?.workflows.find((w) => w.id === run.workflow_id)?.name,
     });
+  }
+  async function exportHistory() {
+    if (!run || active || starting || mic || exporting) return;
+    setExporting(true);
+    setNotice("");
+    try {
+      const path = await api.exportSession(run.id, refinement);
+      if (path)
+        setSavedNotice(
+          t("History exported to {name}.", {
+            name: path.split(/[\\/]/).pop() ?? path,
+          }),
+        );
+    } catch (error) {
+      setNotice(errorText(error));
+    } finally {
+      setExporting(false);
+    }
   }
   async function start() {
     if (
@@ -648,14 +668,35 @@ export function App() {
               </Button>
             </div>
           )}
-          {refining && run && run.steps.length > 0 && (
-            <button
-              className="text-button history-toggle"
-              onClick={() => setCompletedDetails(!completedDetails)}
-              aria-expanded={completedDetails}
-            >
-              {completedDetails ? t("Hide actions") : t("View actions")}
-            </button>
+          {refining && run && (
+            <div className="session-history-actions">
+              {run.steps.length > 0 && (
+                <button
+                  className="text-button history-toggle"
+                  onClick={() => setCompletedDetails(!completedDetails)}
+                  aria-expanded={completedDetails}
+                >
+                  {completedDetails ? t("Hide actions") : t("View actions")}
+                </button>
+              )}
+              <button
+                className="text-button history-export"
+                title={t(
+                  "Includes the full history, window details and recent screenshots.",
+                )}
+                disabled={starting || mic || exporting}
+                onClick={() => void exportHistory()}
+              >
+                {exporting ? (
+                  <LoaderCircle size={14} className="spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+                {exporting
+                  ? t("Exporting history…")
+                  : t("Export history (JSON)")}
+              </button>
+            </div>
           )}
           {current && run && (active || completedDetails) && (
             <>

@@ -15,6 +15,8 @@ pub struct Step {
     pub elapsed_ms: u64,
     pub image_size: Option<[u32; 2]>,
     pub desktop_points: Vec<[i32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<crate::diagnostics::StepDiagnostics>,
 }
 
 impl Step {
@@ -28,6 +30,7 @@ impl Step {
             elapsed_ms,
             image_size: None,
             desktop_points: vec![],
+            diagnostics: None,
         }
     }
 
@@ -53,6 +56,7 @@ impl Step {
             elapsed_ms,
             image_size: Some([frame.image_width, frame.image_height]),
             desktop_points,
+            diagnostics: None,
         }
     }
 }

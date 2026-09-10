@@ -1,7 +1,9 @@
 pub mod broker;
 pub mod capture;
+pub mod export;
 pub mod input;
 pub mod speech;
+pub mod window;
 
 use windows_sys::Win32::{
     Foundation::*,

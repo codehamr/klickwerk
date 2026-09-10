@@ -13,6 +13,67 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  "Includes the full history, window details and recent screenshots.":
+    "Enthält den gesamten Verlauf, Fensterdetails und die letzten Screenshots.",
+  "Windows blocks input to this app because it has higher privileges than klickwerk. Complete this step manually, or reopen the target normally if possible, then continue. Do not change Windows security settings.":
+    "Windows blockiert Eingaben in diese App, weil sie höhere Rechte als klickwerk hat. Führe den Schritt selbst aus oder öffne die Ziel-App nach Möglichkeit normal. Klicke danach auf Weiter. Ändere keine Windows-Sicherheitseinstellungen.",
+  "The action points at klickwerk itself. Bring the intended app into view, then continue or correct the instructions.":
+    "Die Aktion zielt auf klickwerk selbst. Bringe die gewünschte App ins Bild. Fahre dann fort oder korrigiere die Anweisung.",
+  "Windows could not verify the target app's input permissions. Bring an accessible target window into view, or complete this step manually, then continue.":
+    "Windows konnte die Eingaberechte der Ziel-App nicht prüfen. Bringe ein zugängliches Zielfenster ins Bild oder führe den Schritt selbst aus. Fahre danach fort.",
+  "The focused window or text field changed during input. Some text may already have arrived. Check it before continuing.":
+    "Während der Eingabe hat sich das aktive Fenster oder Textfeld geändert. Ein Teil des Textes kann bereits angekommen sein. Prüfe ihn, bevor du fortfährst.",
+  "Windows accepted only part of the input, or none. Input has been released. Check the target before continuing.":
+    "Windows hat die Eingabe nur teilweise oder gar nicht angenommen. Alle Tasten sind losgelassen. Prüfe die Ziel-App, bevor du fortfährst.",
+  "Windows switched to another input desktop. Return to the normal desktop, then continue.":
+    "Windows hat zu einem anderen Eingabedesktop gewechselt. Kehre zum normalen Desktop zurück und fahre dann fort.",
+  "The display layout changed. Observe the desktop again before continuing.":
+    "Die Bildschirmanordnung hat sich geändert. Prüfe den Desktop, bevor du fortfährst.",
+  "The foreground window changed. Observe again before sending input.":
+    "Das aktive Fenster hat sich geändert. Prüfe das Zielfenster, bevor du fortfährst.",
+  "The pointer target is outside a physical monitor.":
+    "Das Mausziel liegt außerhalb eines angeschlossenen Bildschirms.",
+  "The pointer target is outside the captured image.":
+    "Das Mausziel liegt außerhalb des aufgenommenen Bildes.",
+  "Export history (JSON)": "Verlauf exportieren (JSON)",
+  "Exporting history…": "Verlauf wird exportiert…",
+  "History exported to {name}.": "Verlauf nach {name} exportiert.",
+  "This session is no longer available to export.":
+    "Diese Sitzung ist nicht mehr zum Exportieren verfügbar.",
+  "Pause the task before exporting its history.":
+    "Pausiere die Aufgabe, bevor du den Verlauf exportierst.",
+  "The refinement is too long to export.":
+    "Die Verfeinerung ist zu lang für den Export.",
+  "The history could not be saved. Check the folder permissions and available space.":
+    "Der Verlauf konnte nicht gespeichert werden. Prüfe die Ordnerberechtigungen und den freien Speicherplatz.",
+  "The history file could not be replaced. Choose another file or check its permissions.":
+    "Die Verlaufsdatei konnte nicht ersetzt werden. Wähle eine andere Datei oder prüfe ihre Berechtigungen.",
+  "The export dialog could not be opened.":
+    "Der Exportdialog konnte nicht geöffnet werden.",
+  "The export dialog could not be opened. Try again.":
+    "Der Exportdialog konnte nicht geöffnet werden. Versuche es erneut.",
+  "The export worker stopped unexpectedly.":
+    "Der Export wurde unerwartet beendet.",
+  "The session could not be encoded as JSON.":
+    "Die Sitzung konnte nicht in JSON umgewandelt werden.",
+  "Choose a folder for the export.": "Wähle einen Ordner für den Export.",
+  "The main window is unavailable.": "Das Hauptfenster ist nicht verfügbar.",
+  "Selection options": "Auswahlmöglichkeiten",
+  "Make it yours. Changes save automatically.":
+    "Ganz nach deinen Wünschen. Änderungen werden automatisch gespeichert.",
+  "Close settings": "Einstellungen schließen",
+  "Available models": "Verfügbare Modelle",
+  "Show models": "Modelle anzeigen",
+  "Loading models…": "Modelle werden geladen…",
+  "No matching models. You can enter an exact model ID.":
+    "Keine passenden Modelle. Du kannst eine genaue Modell-ID eingeben.",
+  "Follows your desktop language": "Übernimmt die Sprache deines Desktops",
+  "Follows your desktop appearance":
+    "Übernimmt die Darstellung deines Desktops",
+  "Smaller images, faster responses": "Kleinere Bilder, schnellere Antworten",
+  "Best for most tasks": "Passend für die meisten Aufgaben",
+  "Sharper text and small controls":
+    "Schärfere Texte und kleine Bedienelemente",
   "Changes save automatically": "Änderungen werden automatisch gespeichert",
   "All changes saved": "Alle Änderungen gespeichert",
   "Changes not saved.": "Änderungen nicht gespeichert.",

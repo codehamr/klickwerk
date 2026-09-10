@@ -25,6 +25,13 @@ finalization/editing/deletion, stale draft refusal, language detection/override,
 dark mode and narrow layouts. Settings checks include debounced autosave, serialized
 slow writes, close-time flushing, retry/discard after failure, immediate preference
 changes, and correctly spaced number/unit labels in both languages.
+Settings use no completion button. Menu checks cover keyboard and mouse selection,
+focus containment, nested Escape handling, free model IDs, delayed model discovery
+without overwriting typed text, and close-time saves after outside dismissal.
+Export checks parse downloaded JSON after corrections, repeated failures, workflow
+learning and questions, including German text. They verify preserved attempt
+settings, excluded credentials, cancellation/error recovery and stale-session
+refusal after reset.
 On Linux, an installed `/usr/bin/chromium` can be used; otherwise run
 `npx playwright install --with-deps chromium`. `PLAYWRIGHT_CHROMIUM_EXECUTABLE`
 can select another test browser binary.

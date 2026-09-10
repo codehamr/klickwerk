@@ -70,11 +70,23 @@ pub enum Command {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reply {
-    Ready { bounds: [i32; 4] },
+    Ready {
+        bounds: [i32; 4],
+    },
     Armed,
-    Completed { sequence: u64 },
-    Stopped { reason: String },
-    Error { message: String },
+    Completed {
+        sequence: u64,
+    },
+    Stopped {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
+    Rejected {
+        sequence: u64,
+        diagnostic: crate::diagnostics::InputFailure,
+    },
 }
 
 #[derive(Debug)]

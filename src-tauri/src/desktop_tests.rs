@@ -384,7 +384,21 @@ async fn input_suite() -> Result<(), String> {
         };
         let mut pid=0;unsafe{GetWindowThreadProcessId(window,&mut pid);}
         check(pid==editor.id(),"input fixture targets only its newly created child process")?;
-        unsafe{SetForegroundWindow(window);}
+        let target = platform::window::inspect(window as usize, std::process::id());
+        check(target.window.process_id == editor.id() && target.window.class_name == "KlickwerkDisposableEditor" && target.window.integrity_level.is_some() && target.input_block.is_none(), "native diagnostics identify the target and allow equal-integrity input")?;
+        unsafe {
+            let own = CreateWindowExW(0, platform::wide("STATIC").as_ptr(), platform::wide("Disposable handoff fixture").as_ptr(), WS_OVERLAPPEDWINDOW, 150, 200, 400, 250, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null());
+            if own.is_null() { return Err("Could not create the handoff fixture.".into()); }
+            ShowWindow(own, SW_MINIMIZE);
+            SetForegroundWindow(window);
+            let report = platform::window::handoff(own as usize);
+            let no_topmost = GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0;
+            let own_block = platform::window::inspect(own as usize, std::process::id()).input_block;
+            DestroyWindow(own);
+            check(report.visible && !report.minimized && report.focused && report.foreground_after == own as usize, "handoff restores a minimized window and verifies foreground keyboard focus")?;
+            check(no_topmost && own_block.as_deref() == Some("own_window"), "handoff restores ordinary z-order and agent input still rejects its own window")?;
+            SetForegroundWindow(window);
+        }
         let mut broker=BrokerClient::spawn(false)?;armed(&mut broker).await?;
         let screen=capture::capture(1,1280,broker.bounds)?;
         let edit=unsafe{GetDlgItem(window,1)};let mut rect:RECT=unsafe{std::mem::zeroed()};unsafe{GetWindowRect(edit,&mut rect);}
@@ -438,7 +452,7 @@ async fn input_suite() -> Result<(), String> {
         check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"external keyboard input interrupts a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
         check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
-        println!("Disposable input fixture: 10 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
+        println!("Disposable input fixture: 13 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();
     let _ = editor.wait();

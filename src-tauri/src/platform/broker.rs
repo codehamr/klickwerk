@@ -299,6 +299,16 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
                             latch(7);
                             break;
                         }
+                        if let Err(diagnostic) =
+                            super::input::inspect_action(&frame, &action, parent_id)
+                        {
+                            reply(&Reply::Rejected {
+                                sequence,
+                                diagnostic,
+                            });
+                            latch(7);
+                            break;
+                        }
                         match Plan::new(frame, action, parent_id) {
                             Ok(value) => {
                                 plan = Some((sequence, value, clock));
@@ -347,11 +357,27 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
                     let Some(batch) = current.batches.pop_front() else {
                         break;
                     };
-                    if !gate.can_input(now()) || !current.target_valid(batch.point) {
+                    if !gate.can_input(now()) {
+                        latch(7);
+                        break;
+                    }
+                    if let Err(diagnostic) = current.target_valid(batch.point) {
+                        reply(&Reply::Rejected {
+                            sequence,
+                            diagnostic,
+                        });
                         latch(7);
                         break;
                     }
                     if !simulate && !held.send(&batch.events) {
+                        // SendInput does not identify UIPI through GetLastError. Do not invent a cause.
+                        reply(&Reply::Rejected {
+                            sequence,
+                            diagnostic: crate::diagnostics::InputFailure::new(
+                                "send_input_incomplete",
+                                "Windows accepted only part of the input, or none. Input has been released. Check the target before continuing.",
+                            ),
+                        });
                         latch(7);
                         break;
                     }

@@ -1,11 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import type { SessionExport } from "../src/lib/types";
 
 async function connect(page: Page) {
   await page.getByRole("button", { name: "Open settings" }).click();
   await page.getByLabel("Vision model", { exact: true }).fill("qwen3-vl:8b");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
   await expect(page.getByRole("dialog")).toBeHidden();
 }
 async function start(page: Page, task = "Draft a welcome note") {
@@ -78,7 +82,9 @@ test("settings order is URL, key, model; model loading waits for model focus", a
   ).toBeVisible();
   await page.getByRole("tab", { name: "Preferences" }).click();
   await expect(page.getByLabel("Reduce motion")).toHaveCount(0);
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
   expect(
     await page.evaluate(() =>
       localStorage.getItem("klickwerk-preview-settings"),
@@ -90,7 +96,9 @@ test("settings order is URL, key, model; model loading waits for model focus", a
     "http://localhost:1234/v1",
   );
   await page.getByLabel("Server URL").fill("example.org/proxy/v1");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByLabel("Server URL")).toHaveValue(
     "https://example.org/proxy/v1",
@@ -443,7 +451,8 @@ test.describe("German desktop", () => {
     );
     await page.getByRole("button", { name: "Einstellungen öffnen" }).click();
     await page.getByRole("tab", { name: "Allgemein" }).click();
-    await page.getByLabel("Sprache", { exact: true }).selectOption("en");
+    await page.getByLabel("Sprache", { exact: true }).click();
+    await page.getByRole("option", { name: "English", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(page.getByText("All changes saved")).toBeVisible();
     await page.keyboard.press("Escape");
@@ -457,7 +466,8 @@ test.describe("German desktop", () => {
     ).toBeVisible();
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Preferences" }).click();
-    await page.getByLabel("Language", { exact: true }).selectOption("system");
+    await page.getByLabel("Language", { exact: true }).click();
+    await page.getByRole("option", { name: /^Automatic/ }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
     await expect(page.getByText("Alle Änderungen gespeichert")).toBeVisible();
     await page.keyboard.press("Escape");
@@ -484,8 +494,11 @@ test("light, dark, narrow, and handoff layouts render accessibly without overflo
   });
   await page.getByLabel("Vision model", { exact: true }).fill("qwen3-vl:8b");
   await page.getByRole("tab", { name: "Preferences" }).click();
-  await page.getByLabel("Appearance").selectOption("dark");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByLabel("Appearance", { exact: true }).click();
+  await page.getByRole("option", { name: "Dark", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({
@@ -623,7 +636,7 @@ test("autosave coalesces typing and flushes newer edits behind a slow save on cl
   });
   await page.getByLabel("Server URL").fill("example.org/v1");
   await page.getByLabel("Vision model", { exact: true }).fill("latest-model");
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
   const saved = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("klickwerk-preview-settings") ?? "{}"),
@@ -661,7 +674,7 @@ test("autosave failures preserve the draft and allow retry or discarding only un
     .getByLabel("Vision model", { exact: true })
     .fill("keep-this-model");
   await expect(page.getByText("Disk is full.")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByLabel("Vision model", { exact: true })).toHaveValue(
     "keep-this-model",
@@ -713,14 +726,20 @@ for (const locale of ["en-US", "de-DE"]) {
       const limit = page.getByLabel(german ? "Schrittlimit" : "Task limit");
       const seconds = german ? "Sekunden" : "seconds";
       const steps = german ? "Schritte" : "steps";
-      await expect(timeout.locator("option")).toHaveText(
+      await timeout.click();
+      await expect(page.getByRole("option")).toHaveText(
         [30, 60, 120, 180, 300].map((count) => `${count} ${seconds}`),
       );
-      await expect(limit.locator("option")).toHaveText(
+      await page
+        .getByRole("option", { name: `180 ${seconds}`, exact: true })
+        .click();
+      await limit.click();
+      await expect(page.getByRole("option")).toHaveText(
         [10, 25, 50, 100].map((count) => `${count} ${steps}`),
       );
-      await timeout.selectOption("180");
-      await limit.selectOption("25");
+      await page
+        .getByRole("option", { name: `25 ${steps}`, exact: true })
+        .click();
       await expect(
         page.getByText(
           german ? "Alle Änderungen gespeichert" : "All changes saved",
@@ -749,8 +768,8 @@ for (const locale of ["en-US", "de-DE"]) {
       await page
         .getByRole("tab", { name: german ? "Allgemein" : "Preferences" })
         .click();
-      await expect(timeout).toHaveValue("180");
-      await expect(limit).toHaveValue("25");
+      await expect(timeout).toHaveText(`180 ${seconds}`);
+      await expect(limit).toHaveText(`25 ${steps}`);
       await page.setViewportSize({ width: 390, height: 844 });
       expect(
         await page
@@ -766,3 +785,328 @@ for (const locale of ["en-US", "de-DE"]) {
     });
   });
 }
+
+test("settings need no completion button and outside dismissal flushes edits", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(
+    page.getByText("Make it yours. Changes save automatically."),
+  ).toBeVisible();
+  await expect(page.locator(".settings-footer button")).toHaveCount(0);
+  await page.getByLabel("Server URL").fill("localhost:9876");
+  await page.mouse.click(10, 10);
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByLabel("Server URL")).toHaveValue(
+    "http://localhost:9876/v1",
+  );
+});
+
+test("preference menus support keyboard selection, Escape and dialog focus", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByRole("tab", { name: "Preferences" }).click();
+  const appearance = page.getByLabel("Appearance", { exact: true });
+  await appearance.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(appearance).toHaveText("Dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(appearance).toBeFocused();
+  await appearance.click();
+  await expect(
+    page.getByRole("option", { name: "Dark", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  mkdirSync("build/visual", { recursive: true });
+  await page.screenshot({
+    path: "build/visual/dropdown-dark.png",
+    animations: "disabled",
+  });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(appearance).toBeFocused();
+  for (let i = 0; i < 10; i++) {
+    await page.keyboard.press("Tab");
+    expect(
+      await page.evaluate(
+        () => !!document.activeElement?.closest('[role="dialog"]'),
+      ),
+    ).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+});
+
+test("models can be searched, selected with keyboard or mouse, and entered freely", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const model = page.getByRole("combobox", {
+    name: "Vision model",
+    exact: true,
+  });
+  await model.click();
+  await expect(page.getByRole("option")).toHaveCount(3);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await model.fill("qwen");
+  await expect(page.getByRole("option")).toHaveCount(1);
+  await model.press("ArrowDown");
+  await expect(model).toHaveAttribute("aria-activedescendant", /.+/);
+  await model.press("Enter");
+  await expect(model).toHaveValue("qwen3-vl:8b");
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(model).toBeFocused();
+  await page.getByRole("button", { name: "Show models" }).click();
+  await expect(page.getByRole("option")).toHaveCount(3);
+  await expect(
+    page.getByRole("option", { name: "qwen3-vl:8b", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  const another = page.getByRole("option").last();
+  const selected = await another.innerText();
+  await another.click();
+  await expect(model).toHaveValue(selected);
+  await model.fill("my-private-vision-model");
+  await expect(
+    page.getByText("No matching models. You can enter an exact model ID."),
+  ).toBeVisible();
+  await model.press("Escape");
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await model.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(model).toHaveValue("my-private-vision-model");
+});
+
+test("a late model list keeps typed IDs and remains available for filtering", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    api.models = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return { models: ["server-vision-model"], partial: false };
+    };
+  });
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const model = page.getByRole("combobox", {
+    name: "Vision model",
+    exact: true,
+  });
+  await model.click();
+  await expect(page.getByText("Loading models…")).toBeVisible();
+  await model.fill("my-custom-model");
+  await expect(page.getByText(/1 models found/)).toBeVisible();
+  await expect(model).toHaveValue("my-custom-model");
+  await model.fill("server");
+  await expect(
+    page.getByRole("option", { name: "server-vision-model", exact: true }),
+  ).toBeVisible();
+});
+
+async function exportReport(page: Page, label = "Export history (JSON)") {
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: label, exact: true }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toMatch(
+    /^klickwerk-session-\d+-\d+\.json$/,
+  );
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  const text = await readFile(path!, "utf8");
+  expect(text).not.toContain('"api_key"');
+  return JSON.parse(text) as SessionExport;
+}
+
+test("JSON export preserves actions, all corrections, attempts and the learned workflow", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await start(page, "Write Grüße 世界 in an editor");
+  await expect(
+    page.getByText("Focus the document editor", { exact: true }),
+  ).toBeVisible();
+  await takeOver(page);
+  await page
+    .getByLabel("Your refinement")
+    .fill("Use the main editor, then add Grüße 世界.");
+  await page.getByRole("button", { name: "Refine & continue" }).click();
+  await expect(page.getByText("Done. Back to you.")).toBeVisible();
+  await page
+    .getByLabel("Your refinement")
+    .fill("Next time, add a closing sentence.");
+  const report = await exportReport(page);
+  expect(report.schema_version).toBe(2);
+  expect(report.app).toMatchObject({ name: "klickwerk", platform: "preview" });
+  expect(report.run.task).toBe("Write Grüße 世界 in an editor");
+  expect(report.run.phase).toBe("done");
+  expect(report.run.attempts.map((a) => a.phase)).toEqual(["stopped", "done"]);
+  expect(report.run.attempts.every((a) => a.finished_at! >= a.started_at)).toBe(
+    true,
+  );
+  expect(
+    report.run.steps
+      .filter((s) => s.actor === "user")
+      .map((s) => s.description),
+  ).toEqual(["Use the main editor, then add Grüße 世界."]);
+  expect(
+    report.run.steps.some(
+      (s) => s.action?.type === "text" && s.action.text.includes("Grüße 世界"),
+    ),
+  ).toBe(true);
+  expect(report.unsent_refinement).toBe("Next time, add a closing sentence.");
+  expect(report.workflow).toBeNull();
+  expect(report.coverage).toEqual({
+    history: "all_recorded_steps_and_attempts",
+    screenshots: "unavailable_in_preview",
+    raw_model_responses: "not_retained",
+  });
+  expect(await savedWorkflows(page)).toHaveLength(0);
+  await expect(page.getByLabel("Your refinement")).toHaveValue(
+    report.unsent_refinement!,
+  );
+  await saveWorkflow(page, "Learned note");
+  const learned = await exportReport(page);
+  expect(learned.run.id).toBe(report.run.id);
+  expect(learned.workflow?.id).toBe(learned.run.workflow_id);
+  expect(learned.workflow?.prompt).toContain("closing sentence");
+  expect(learned.warm_start_prompt).toBe(learned.workflow?.prompt);
+  expect(learned.run.steps.filter((s) => s.actor === "user")).toHaveLength(2);
+  expect(learned.run.attempts).toEqual(report.run.attempts);
+});
+
+test("JSON export keeps earlier failures and each attempt's model settings", async ({
+  page,
+}) => {
+  await page.goto("/?scenario=error");
+  await connect(page);
+  await start(page);
+  await expect(page.getByText("Couldn’t finish. Back to you.")).toBeVisible();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page
+    .getByRole("combobox", { name: "Vision model", exact: true })
+    .fill("retry-model");
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByText("Starting in a moment")).toBeVisible();
+  await expect(page.getByText("Couldn’t finish. Back to you.")).toBeVisible();
+  const report = await exportReport(page);
+  expect(report.run.phase).toBe("error");
+  expect(report.run.attempts.map((a) => a.phase)).toEqual(["error", "error"]);
+  expect(report.run.attempts.map((a) => a.settings.model)).toEqual([
+    "qwen3-vl:8b",
+    "retry-model",
+  ]);
+  expect(report.run.attempts[0].message).toContain("Cannot reach");
+  expect(report.run.attempts[1].user_reply).toBe("");
+  expect(
+    report.run.steps.some((s) =>
+      s.description.includes("without a correction"),
+    ),
+  ).toBe(true);
+  expect(report.unsent_refinement).toBeNull();
+});
+
+test("cancelled or failed exports preserve the session and reset rejects stale exports", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await start(page);
+  await takeOver(page);
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const original = api.exportSession;
+    let attempt = 0;
+    api.exportSession = (...args: unknown[]) => {
+      attempt++;
+      if (attempt === 1) return Promise.resolve(null);
+      if (attempt === 2)
+        return Promise.reject(
+          new Error(
+            "The history could not be saved. Check the folder permissions and available space.",
+          ),
+        );
+      return original(...args);
+    };
+  });
+  const button = page.getByRole("button", {
+    name: "Export history (JSON)",
+    exact: true,
+  });
+  await button.click();
+  await expect(button).toBeEnabled();
+  await expect(page.getByText(/History exported to/)).toBeHidden();
+  await expect(page.getByLabel("Your refinement")).toBeVisible();
+  await button.click();
+  await expect(
+    page.getByText(
+      "The history could not be saved. Check the folder permissions and available space.",
+    ),
+  ).toBeVisible();
+  const report = await exportReport(page);
+  expect(report.run.phase).toBe("stopped");
+  await page.getByRole("button", { name: "New task" }).click();
+  await expect(button).toBeHidden();
+  const error = await page.evaluate(async (id) => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    try {
+      await api.exportSession(id, "");
+      return "unexpected success";
+    } catch (error) {
+      return String(error);
+    }
+  }, report.run.id);
+  expect(error).toContain("no longer available to export");
+});
+
+test.describe("German history export", () => {
+  test.use({ locale: "de-DE" });
+  test("the export is available at a question and keeps German user text", async ({
+    page,
+  }) => {
+    await page.goto("/?scenario=ask");
+    await page.getByRole("button", { name: "Einstellungen öffnen" }).click();
+    await page
+      .getByRole("combobox", { name: "Vision-Modell", exact: true })
+      .fill("qwen3-vl:8b");
+    await page.getByRole("button", { name: "Einstellungen schließen" }).click();
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await page.locator("#task").fill("Schreibe eine Begrüßung mit Grüße 世界.");
+    await page.locator(".start-button").click();
+    await expect(
+      page.getByRole("button", { name: "Verlauf exportieren (JSON)" }),
+    ).toBeVisible();
+    await page.locator("#task").fill("Bitte im Ordner Dokumente speichern.");
+    const report = await exportReport(page, "Verlauf exportieren (JSON)");
+    expect(report.run.phase).toBe("waiting");
+    expect(report.run.question).not.toBe("");
+    expect(report.run.task).toContain("Grüße 世界");
+    expect(report.unsent_refinement).toBe(
+      "Bitte im Ordner Dokumente speichern.",
+    );
+    expect(report.run.attempts[0].settings.language).toBe("German");
+    await expect(
+      page.getByText(/Verlauf nach klickwerk-session-/),
+    ).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: "build/visual/history-export-de-DE.png",
+      animations: "disabled",
+    });
+  });
+});
