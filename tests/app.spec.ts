@@ -1113,3 +1113,153 @@ test.describe("German history export", () => {
     });
   });
 });
+
+test("administrator recovery preserves the blocked session on cancellation and resumes explicitly", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const snapshot = await api.bootstrap();
+    const message =
+      "Windows blocks input because this app has higher privileges than klickwerk. Restart klickwerk as administrator, or reopen the target app without administrator rights. A manual text entry will not unblock subsequent clicks.";
+    snapshot.run = {
+      ...snapshot.run,
+      id: 41,
+      task: 'Filter Task Manager by "chr" and sort Memory descending.',
+      phase: "stopped",
+      message,
+      recovery: {
+        code: "higher_integrity",
+        message,
+        target: null,
+        win32_error: null,
+      },
+      steps: [
+        {
+          id: 1,
+          actor: "agent",
+          description: "Opened Task Manager",
+          action: { type: "key", key: "ESC", modifiers: ["ctrl", "shift"] },
+          status: "completed",
+          elapsed_ms: 100,
+          image_size: [960, 640],
+          desktop_points: [],
+        },
+      ],
+    };
+    snapshot.can_restart_elevated = true;
+    let attempts = 0;
+    api.restartAsAdministrator = async (runId: number, refinement: string) => {
+      if (runId !== 41 || refinement !== "Keep the filter exactly chr.")
+        throw new Error("Incorrect restart context");
+      attempts++;
+      if (attempts === 1)
+        throw new Error(
+          "The administrator restart was cancelled. Your session is still open.",
+        );
+      snapshot.can_restart_elevated = false;
+      snapshot.run.recovery = null;
+      snapshot.run.message =
+        "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.";
+      window.dispatchEvent(
+        new CustomEvent("state", { detail: structuredClone(snapshot) }),
+      );
+    };
+    api.start = async (task: string, reply: string, resumeRunId: number) => {
+      if (
+        task !== snapshot.run.task ||
+        reply !== "Keep the filter exactly chr." ||
+        resumeRunId !== 41
+      )
+        throw new Error("Incorrect continuation context");
+      snapshot.run.phase = "running";
+      snapshot.run.message = "Inspecting the current desktop";
+      window.dispatchEvent(
+        new CustomEvent("state", { detail: structuredClone(snapshot) }),
+      );
+    };
+    window.dispatchEvent(
+      new CustomEvent("state", { detail: structuredClone(snapshot) }),
+    );
+  });
+  await expect(
+    page.getByRole("heading", { name: "Administrator rights needed" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/A manual text entry will not unblock subsequent clicks/),
+  ).toBeVisible();
+  await page.getByLabel("Your refinement").fill("Keep the filter exactly chr.");
+  const restart = page.getByRole("button", {
+    name: "Restart as administrator",
+  });
+  await restart.click();
+  await expect(
+    page.getByText(
+      "The administrator restart was cancelled. Your session is still open.",
+    ),
+  ).toBeVisible();
+  await expect(restart).toBeEnabled();
+  await page.getByRole("button", { name: "View actions", exact: true }).click();
+  await expect(
+    page.getByText("Opened Task Manager", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Your refinement")).toHaveValue(
+    "Keep the filter exactly chr.",
+  );
+  await restart.click();
+  await expect(
+    page.getByText(
+      "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.",
+    ),
+  ).toBeVisible();
+  await expect(restart).toBeHidden();
+  await expect(
+    page.getByText("Opened Task Manager", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Working on it" }),
+  ).toBeHidden();
+  await page.getByRole("button", { name: "Refine & continue" }).click();
+  await expect(page.getByText("Inspecting the current desktop")).toBeVisible();
+});
+
+test("administrator restart restores the unsent refinement at startup in German", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const path = "/src/lib/bridge.ts";
+    const { api } = await import(path);
+    const snapshot = await api.bootstrap();
+    snapshot.settings.language = "de";
+    snapshot.run = {
+      ...snapshot.run,
+      id: 42,
+      phase: "stopped",
+      task: "Filter chr",
+      message:
+        "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.",
+    };
+    snapshot.restored_refinement = "Bitte chr beibehalten.";
+    api.bootstrap = async () => snapshot;
+    const fixture = document.createElement("div");
+    fixture.id = "root";
+    document.body.replaceChildren(fixture);
+    const entry = "/src/main.tsx?restart-fixture";
+    await import(entry);
+  });
+  await expect(
+    page.getByText(
+      "klickwerk wurde als Administrator neu gestartet. Klicke auf Weiter, um den aktuellen Desktop zu prüfen und die Aufgabe fortzusetzen.",
+    ),
+  ).toBeVisible();
+  await expect(page.locator("#root textarea")).toHaveValue(
+    "Bitte chr beibehalten.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Als Administrator neu starten" }),
+  ).toBeHidden();
+});

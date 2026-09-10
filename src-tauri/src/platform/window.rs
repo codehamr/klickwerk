@@ -7,7 +7,7 @@ use windows_sys::Win32::{
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
-fn privileges(pid: u32) -> Result<(u32, bool), u32> {
+pub fn privileges(pid: u32) -> Result<(u32, bool), u32> {
     unsafe {
         let process = Handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid));
         if process.0.is_null() {

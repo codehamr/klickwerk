@@ -1605,6 +1605,9 @@ input::placeholder {
   color: var(--ink);
   font-weight: 500;
 }
+.restart-button {
+  margin-top: 14px;
+}
 .history-toggle {
   margin: 16px 0;
 }

@@ -2,7 +2,7 @@ use crate::{
     config::Settings,
     workflow::{Step, Workflow},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Write,
@@ -21,7 +21,7 @@ pub fn timestamp() -> u64 {
         .as_millis() as u64
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ExecutionSettings {
     base_url: String,
     model: String,
@@ -43,7 +43,7 @@ impl From<&Settings> for ExecutionSettings {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Attempt {
     number: usize,
     started_at: u64,
@@ -61,7 +61,7 @@ pub struct Attempt {
     terminal_desktop: Option<crate::diagnostics::TerminalDesktop>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RunView {
     pub id: u64,
     pub phase: String,
@@ -75,6 +75,10 @@ pub struct RunView {
     pub workflow_id: Option<String>,
     pub started_at: u64,
     pub attempts: Vec<Attempt>,
+    #[serde(default)]
+    pub recovery: Option<crate::diagnostics::InputFailure>,
+    #[serde(default)]
+    pub recovery_events: Vec<crate::diagnostics::RecoveryEvent>,
     #[serde(skip)]
     pub evidence: Arc<Evidence>,
 }
@@ -93,11 +97,46 @@ impl Default for RunView {
             workflow_id: None,
             started_at: 0,
             attempts: vec![],
+            recovery: None,
+            recovery_events: vec![],
             evidence: Arc::default(),
         }
     }
 }
 impl RunView {
+    pub fn block_for_privileges(
+        &mut self,
+        failure: crate::diagnostics::InputFailure,
+        source: &str,
+    ) {
+        self.phase = "stopped".into();
+        self.question.clear();
+        self.message = failure.message.clone();
+        let sender = failure
+            .target
+            .as_ref()
+            .and_then(|t| t.sender_integrity_level);
+        self.recovery_event("privilege_blocked", source, sender, Some(failure.clone()));
+        self.recovery = Some(failure);
+    }
+
+    pub fn recovery_event(
+        &mut self,
+        kind: &str,
+        source: &str,
+        sender: Option<u32>,
+        failure: Option<crate::diagnostics::InputFailure>,
+    ) {
+        self.recovery_events
+            .push(crate::diagnostics::RecoveryEvent {
+                recorded_at: timestamp(),
+                kind: kind.into(),
+                source: source.into(),
+                sender_integrity_level: sender,
+                failure,
+            });
+    }
+
     pub fn begin_attempt(
         &mut self,
         settings: &Settings,
@@ -157,7 +196,7 @@ impl RunView {
 
 // Keep image evidence out of UI snapshots and workflow/model history. The shared
 // allocation also avoids copying several MiB on every progress event.
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
     pub frames_observed: usize,
     pub frames_omitted: usize,
@@ -166,12 +205,12 @@ pub struct Evidence {
     pub model_responses_omitted: usize,
     pub model_responses: Vec<crate::diagnostics::ModelResponse>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ScreenEvidence {
     pub frame: crate::guard::Frame,
     pub observed_at: u64,
     pub purpose: String,
-    pub mime: &'static str,
+    pub mime: String,
     pub jpeg_base64: String,
 }
 impl Evidence {
@@ -215,7 +254,7 @@ impl Evidence {
             frame: frame.clone(),
             observed_at: timestamp(),
             purpose: purpose.into(),
-            mime: "image/jpeg",
+            mime: "image/jpeg".into(),
             jpeg_base64: encoded,
         });
     }

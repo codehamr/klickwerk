@@ -40,6 +40,8 @@ pub struct Snapshot {
     locale: &'static str,
     workflows: Vec<WorkflowSummary>,
     workflow_error: Option<String>,
+    can_restart_elevated: bool,
+    restored_refinement: String,
 }
 
 pub struct AppState {
@@ -51,6 +53,7 @@ pub struct AppState {
     requests: Mutex<HashMap<String, oneshot::Sender<()>>>,
     speech: Mutex<Option<Arc<AtomicBool>>>,
     session: Mutex<Session>,
+    restored_refinement: Mutex<String>,
     workflows: Mutex<WorkflowStore>,
     drafts: Mutex<HashMap<String, PreparedWorkflow>>,
 }
@@ -78,6 +81,8 @@ impl AppState {
             has_api_key,
             config_path,
             config_error,
+            can_restart_elevated: crate::recovery::can_restart(&run),
+            restored_refinement: self.restored_refinement.lock().unwrap().clone(),
             run,
             platform: "windows",
             locale: if unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() }
@@ -277,12 +282,23 @@ fn start_task(
         };
     }
     state.drafts.lock().unwrap().clear();
+    state.restored_refinement.lock().unwrap().clear();
     view.begin_attempt(
         &settings,
         first_step_id,
         user_reply,
         &state.session.lock().unwrap().memory,
     );
+    if view.recovery.take().is_some() || !view.recovery_events.is_empty() {
+        view.recovery_event(
+            "resume_requested",
+            "user_continue",
+            platform::window::privileges(std::process::id())
+                .ok()
+                .map(|p| p.0),
+            None,
+        );
+    }
     view.phase = "checking".into();
     view.interrupted = false;
     view.question.clear();
@@ -298,6 +314,78 @@ fn start_task(
         controller(app, settings, task, cancel).await;
     });
     Ok(())
+}
+
+#[tauri::command]
+async fn restart_as_administrator(
+    app: tauri::AppHandle,
+    run_id: u64,
+    refinement: String,
+) -> Result<(), String> {
+    let owner = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .ok_or(crate::recovery::RESTART_FAILED)?
+        .0 as usize;
+    let session = {
+        let state = app.state::<AppState>();
+        let mut active = state.active.lock().unwrap();
+        if active.is_some() || state.speech.lock().unwrap().is_some() {
+            return Err("Finish the current activity before restarting klickwerk.".into());
+        }
+        let mut view = state.view.lock().unwrap();
+        if view.id != run_id {
+            return Err("This session is not available for an administrator restart.".into());
+        }
+        let mut session = crate::recovery::RestartSession::new(
+            view.clone(),
+            state.session.lock().unwrap().memory.clone(),
+            refinement,
+        )?;
+        view.recovery_event(
+            "elevation_requested",
+            "user_restart",
+            platform::window::privileges(std::process::id())
+                .ok()
+                .map(|p| p.0),
+            None,
+        );
+        session.run = view.clone();
+        // Reserve the existing activity gate while UAC and the transfer are pending.
+        *active = Some(Arc::new(AtomicBool::new(false)));
+        session
+    };
+    let result = tokio::task::spawn_blocking(move || platform::restart::launch(owner, session))
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::diagnostics::InputFailure::new(
+                "restart_worker_failed",
+                crate::recovery::RESTART_FAILED,
+            ))
+        });
+    match result {
+        Ok(()) => {
+            app.exit(0);
+            Ok(())
+        }
+        Err(failure) => {
+            {
+                let state = app.state::<AppState>();
+                let mut active = state.active.lock().unwrap();
+                state.view.lock().unwrap().recovery_event(
+                    "elevation_failed",
+                    "user_restart",
+                    platform::window::privileges(std::process::id())
+                        .ok()
+                        .map(|p| p.0),
+                    Some(failure.clone()),
+                );
+                *active = None;
+            }
+            emit(&app);
+            Err(failure.message)
+        }
+    }
 }
 
 #[tauri::command]
@@ -537,6 +625,7 @@ fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, Strin
 }
 
 fn clear_session(state: &AppState) {
+    state.restored_refinement.lock().unwrap().clear();
     *state.view.lock().unwrap() = RunView::default();
     *state.session.lock().unwrap() = Session::default();
     state.drafts.lock().unwrap().clear();
@@ -791,6 +880,7 @@ enum End {
     Stopped(String),
     Failed(String),
     Question(String),
+    Blocked(crate::diagnostics::InputFailure, &'static str),
     Done(String),
 }
 
@@ -1037,7 +1127,7 @@ async fn controller(
                 frame_id: screen.frame.id, bytes: &screen.jpeg, width: screen.frame.image_width, height: screen.frame.image_height, mime: "image/jpeg",
             })).await;
             let diagnostic = crate::diagnostics::StepDiagnostics {
-                frame: screen.frame.clone(), focused_control: screen.focused_control, foreground,
+                frame: screen.frame.clone(), focused_control: screen.focused_control, foreground: foreground.clone(),
                 model_elapsed_ms: model_started.elapsed().as_millis() as u64,
                 observation_age_ms: platform::now().saturating_sub(screen.frame.captured_ms),
                 validation_elapsed_ms: None, input_elapsed_ms: None, targets: vec![], rejection: None,
@@ -1104,6 +1194,11 @@ async fn controller(
                 }
                 Action::AskUser { question } => {
                     action_status(&app, "recorded");
+                    if foreground.input_block.as_deref() == Some("higher_integrity") {
+                        let failure = crate::diagnostics::InputFailure::target(foreground);
+                        action_diagnostics(&app, |d| d.rejection = Some(failure.clone()));
+                        return Err(End::Blocked(failure, "model_handoff"));
+                    }
                     return Err(End::Question(question.clone()));
                 }
                 Action::Wait { duration_ms } => {
@@ -1124,6 +1219,7 @@ async fn controller(
                             action_status(&app, "skipped");
                             moved_targets += 1;
                             if matches!(failure.code.as_str(), "own_window" | "foreground_changed") && moved_targets < 3 { continue; }
+                            if failure.code == "higher_integrity" { return Err(End::Blocked(failure, "input_validation")); }
                             return Err(End::Stopped(failure.message));
                         }
                     }
@@ -1151,6 +1247,7 @@ async fn controller(
                         Reply::Rejected { sequence, diagnostic } if sequence == step as u64 => {
                             action_diagnostics(&app, |d| { d.input_elapsed_ms = Some(input_started.elapsed().as_millis() as u64); d.rejection = Some(diagnostic.clone()); });
                             action_status(&app, "interrupted");
+                            if diagnostic.code == "higher_integrity" { return Err(End::Blocked(diagnostic, "input_broker")); }
                             return Err(End::Stopped(diagnostic.message));
                         }
                         _ => return Err(End::Failed("The input acknowledgement did not match this step.".into())),
@@ -1265,6 +1362,7 @@ async fn controller(
                 view.message = "Control is paused while you reply.".into();
                 view.question = question;
             }
+            End::Blocked(failure, source) => view.block_for_privileges(failure, source),
             End::Done(summary) => {
                 view.phase = "done".into();
                 view.message = "Your task is complete.".into();
@@ -1287,6 +1385,20 @@ fn app_context() -> tauri::Context<tauri::Wry> {
 }
 
 pub fn run() {
+    let restored = match platform::restart::receive_if_requested() {
+        Ok(restored) => restored,
+        Err(error) => {
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                    std::ptr::null_mut(),
+                    platform::wide(&error).as_ptr(),
+                    platform::wide("klickwerk").as_ptr(),
+                    windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                );
+            }
+            return;
+        }
+    };
     // Single-instance ownership protects both the portable config and the desktop controller.
     let name = platform::wide("Local\\KlickwerkDesktopV2");
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
@@ -1307,15 +1419,21 @@ pub fn run() {
     let _mutex = platform::Handle(mutex);
     let config = ConfigStore::beside_executable();
     let workflows = WorkflowStore::load(config.path.with_file_name("workflows.json"));
+    let (view, memory, refinement) = restored.map_or_else(
+        || (RunView::default(), String::new(), String::new()),
+        |session| (session.run, session.memory, session.refinement),
+    );
+    let next_id = view.id;
     let state = AppState {
         config: Mutex::new(config),
-        view: Mutex::new(RunView::default()),
+        view: Mutex::new(view),
         active: Mutex::new(None),
         ui_at: AtomicU64::new(platform::now()),
-        next_id: AtomicU64::new(0),
+        next_id: AtomicU64::new(next_id),
         requests: Mutex::new(HashMap::new()),
         speech: Mutex::new(None),
-        session: Mutex::new(Session::default()),
+        session: Mutex::new(Session { memory }),
+        restored_refinement: Mutex::new(refinement),
         workflows: Mutex::new(workflows),
         drafts: Mutex::new(HashMap::new()),
     };
@@ -1329,6 +1447,7 @@ pub fn run() {
             test_connection,
             cancel_request,
             start_task,
+            restart_as_administrator,
             get_workflow,
             export_session,
             prepare_workflow,

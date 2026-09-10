@@ -55,6 +55,13 @@ impl InputFailure {
             win32_error: None,
         }
     }
+    pub fn can_restart_elevated(&self) -> bool {
+        self.code == "higher_integrity" && self.target.as_ref().is_some_and(|target| {
+            matches!((target.sender_integrity_level, target.window.integrity_level),
+                (Some(sender), Some(required)) if sender < 0x3000 && required <= 0x3000 && required > sender)
+        })
+    }
+
     pub fn target(target: TargetInfo) -> Self {
         let code = target
             .input_block
@@ -62,7 +69,7 @@ impl InputFailure {
             .unwrap_or("window_inspection_failed");
         let message = match code {
             "higher_integrity" => {
-                "Windows blocks input to this app because it has higher privileges than klickwerk. Complete this step manually, or reopen the target normally if possible, then continue. Do not change Windows security settings."
+                "Windows blocks input because this app has higher privileges than klickwerk. Restart klickwerk as administrator, or reopen the target app without administrator rights. A manual text entry will not unblock subsequent clicks."
             }
             "own_window" => {
                 "The action points at klickwerk itself. Bring the intended app into view, then continue or correct the instructions."
@@ -78,6 +85,15 @@ impl InputFailure {
             target: Some(Box::new(target)),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoveryEvent {
+    pub recorded_at: u64,
+    pub kind: String,
+    pub source: String,
+    pub sender_integrity_level: Option<u32>,
+    pub failure: Option<InputFailure>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -149,7 +165,7 @@ pub struct RepeatCheck {
     pub outcome: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalDesktop {
     pub frame_id: Option<u64>,
     pub capture_error: Option<String>,
@@ -158,7 +174,7 @@ pub struct TerminalDesktop {
     pub focused_control: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelResponse {
     pub frame_id: u64,
     pub received_at: u64,
@@ -169,7 +185,7 @@ pub struct ModelResponse {
     pub parse_error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Handoff {
     pub method: String,
     pub foreground_before: usize,

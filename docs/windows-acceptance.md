@@ -121,8 +121,23 @@ physical hardware still needs the manual checks above.
   foreground metadata, search result, sort indicator and image/desktop mapping.
 - Test a target at higher integrity than klickwerk: no input should be sent, and
   the UI should explain the privilege mismatch with Continue/refinement available.
-  Complete the blocked step manually if necessary. An equally elevated sender and
-  fixture target must remain eligible; own windows must still be rejected.
+  The recovery card must replace an unhelpful request to type only `chr` manually:
+  manual text entry does not remove the permission block for later sorting.
+  An equally elevated sender and fixture target must remain eligible; own windows
+  must still be rejected.
+- With a higher-integrity Task Manager, choose **Restart as administrator**. Cancel
+  UAC first: the original session, evidence and refinement must remain. Retry and
+  approve as the same Windows user: one restored app opens, paused, with all prior
+  steps, attempts, images and draft text. Continue must capture a NEW desktop and
+  proceed to focus/filter/sort, rather than repeat the launch or old permission
+  refusal. Verify input to the now equally elevated target and takeover monitoring.
+  Test paths containing spaces/non-ASCII characters, repeat restart clicks, stale
+  run IDs and denied launches. No UAC prompt may originate from a model action.
+- Export before cancellation, after cancellation, after restart and after Continue.
+  Inspect `recovery_events` for both integrity levels, failure source, UAC error
+  1223 on cancellation, and successful restoration. Earlier attempt outcomes must
+  remain unchanged. A restart transfer failure must leave the original app open.
+  Test the actual UAC flow on Windows 11; Wine fixtures do not validate consent UI.
 - Export after a refusal and after refinement. Inspect rejection codes, both
   integrity levels, window title/class/bounds, frame references, model and input
   timing, and handoff verification. Decode a `jpeg_base64` entry as a JPEG.

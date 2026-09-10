@@ -3,6 +3,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod guard;
 pub mod provider;
+pub mod recovery;
 pub mod session;
 pub mod settling;
 pub mod workflow;

@@ -49,6 +49,14 @@ The Windows WebView2 Runtime is required and normally ships with Windows 11. The
 EXE is not an installer and does not silently download a runtime. Move the app out
 of `Program Files` or another read-only folder if settings cannot be saved.
 
+When a target such as Task Manager runs as administrator, Windows can block input
+from a normally launched klickwerk. Choose **Restart as administrator** in the
+paused task, approve the Windows UAC prompt, then click **Continue**. Task history,
+recent diagnostic evidence and unsent refinement text survive this explicit restart.
+Cancelling UAC keeps the original session open. Input resumes only after Continue;
+settings and security policies are not changed. Use the same Windows account so
+DPAPI-protected connection credentials remain readable.
+
 The microphone uses the Windows default SAPI recognizer and default audio input.
 An installed speech language and microphone permission are required. Typed prompts
 remain available. Prompts and dictation can be multilingual; the interface supports English and German.

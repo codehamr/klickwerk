@@ -204,3 +204,27 @@ and repeat-guard outcomes. Frame IDs are independent of step IDs. The terminal
 window is inspected and a final capture attempted before restoring klickwerk.
 Sampling traces are condensed only in model context, not in the export. Failed model requests retain their
 observation and a no-input system step. See [session export](session-export.md).
+
+## Explicit privilege recovery
+
+A confirmed higher-integrity foreground during a model handoff, or a native input
+refusal, produces a structured recovery instead of implying that one manual text
+entry will unblock later actions. Reading a screenshot and finishing a verified
+read-only task remain possible. Equal-integrity input uses the existing guards.
+
+The local UI offers an administrator restart only for a stopped session with a
+confirmed block that High integrity can resolve. Its native command validates the
+run ID, reserves the activity gate and invokes the current executable via
+[ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
+with the `runas` verb. The user handles the normal Windows UAC prompt. The model
+has no elevation action; the app manifest and Windows security settings are unchanged.
+
+An ephemeral loopback socket and a random 256-bit token transfer a size-bounded
+session in memory. Task text, history, evidence and unsent refinement are not
+placed in command-line arguments or temporary files; API credentials are not
+transferred. The new process verifies its integrity, deserializes the session and
+acknowledges receipt before the original exits. It waits for the original process
+to exit before acquiring the single-instance mutex. Failed/cancelled launches or
+failed acknowledgements leave the original session open. The new window remains
+paused until Continue, which creates a new broker and checks fresh permissions,
+focus and screenshots. The existing physical-input stop mechanism still applies.

@@ -6,7 +6,9 @@ workflow. Windows opens a native Save As dialog; the browser preview downloads a
 fixture report. Cancelling leaves the session unchanged, and failed writes can be
 retried. Existing files are replaced only after the complete report is written.
 
-Export before choosing New task, deleting the workflow or closing the app. Raw
+Export before choosing New task, deleting the workflow or closing the app.
+The explicit administrator restart transfers the session in memory and preserves
+its history and bounded evidence without requiring an export first. Raw
 history remains temporary until explicitly exported; workflow storage still
 contains only consolidated start prompts. A saved workflow without its current
 session has no old action history to export.
@@ -20,6 +22,8 @@ session has no old action history to export.
 | `app` | Application name, version and `windows` or `preview` platform |
 | `run` | Original task, session ID, current outcome, message, question/result, duration, start time, workflow association, steps and attempts |
 | `run.steps` | Every recorded step in order, with actor, description, action and its arguments, status, elapsed time, image dimensions and desktop coordinates |
+| `run.recovery` | Current structured privilege block, including sender/target integrity; cleared when continuing or after a successful administrator restart |
+| `run.recovery_events` | Timestamped privilege blocks, explicit restart requests, failed/cancelled launches with Windows error codes, successful restoration and subsequent resume requests |
 | `run.attempts` | Every initial start and continuation, with timestamps, step range, user reply, outcome, model/server configuration and warm-start prompt used at that time |
 | `workflow` | Associated workflow and its current consolidated prompt, or `null` |
 | `warm_start_prompt` | Current learned instructions retained by the session |
@@ -76,8 +80,10 @@ and `window_inspection_failed`. Native checks run again in the broker before inp
 and between batches. `rejection.code` also identifies changed observations/focus,
 monitor gaps and incomplete input. Completed input still requires visual verification.
 The numeric levels are Windows mandatory integrity RIDs; elevation alone is not an
-input permission decision. Higher-integrity input pauses for manual completion or
-an ordinary target launch; the app does not elevate itself or change Windows policy.
+input permission decision. Higher-integrity input pauses with explicit restart
+recovery when administrator integrity can resolve it, or the user can reopen the
+target without administrator rights. The app never requests elevation from a model
+action and does not change Windows policy.
 
 The supplied version 1 Task Manager log proves that Ctrl+Shift+Escape was dispatched
 and the next click was refused, but cannot identify which of the three old generic
@@ -114,3 +120,17 @@ window permissions. `input_effect_observed` means a change was detected; it does
 assert that the requested app/filter/sort succeeded. A higher-integrity Task Manager
 still requires manual input or an ordinary target launch. This feedback changes the
 controller and reusable instructions; it does not train model weights.
+
+## September privilege regression
+
+The follow-up export confirms the delayed-launch fix worked: Task Manager became
+the foreground window about 734 ms after the shortcut, and the controller used
+a fresh observation. Taskmgr.exe had integrity 12288 (High), while klickwerk had
+8192 (Medium); `input_block` was `higher_integrity`. The model's manual-filter
+request could not solve the subsequent blocked sort. The controller now provides
+structured recovery for both model handoffs and native input refusals.
+`coverage.controller_revision` identifies `2026-09-privilege-recovery-v2`.
+Cancellation is represented as `elevation_failed` with failure code
+`elevation_cancelled` and Windows error 1223; launch and transfer errors have their
+own codes. `elevation_restored` records the verified new sender integrity. Earlier
+steps keep their original permissions and attempted actions for comparison.

@@ -17,6 +17,7 @@ import {
   MousePointer2,
   Plus,
   Settings2,
+  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -97,7 +98,10 @@ export function App() {
     void api
       .bootstrap()
       .then((next) => {
-        if (alive && !receivedUpdate.current) setSnapshot(next);
+        if (alive && !receivedUpdate.current) {
+          setSnapshot(next);
+          setRefinement(next.restored_refinement ?? "");
+        }
       })
       .catch((error) => {
         if (alive) setFatal(errorText(error));
@@ -227,6 +231,18 @@ export function App() {
       setNotice(errorText(error));
     } finally {
       setExporting(false);
+    }
+  }
+  async function restartAsAdministrator() {
+    if (!run || active || starting || mic || exporting) return;
+    setStarting(true);
+    setNotice("");
+    try {
+      await api.restartAsAdministrator(run.id, refinement);
+    } catch (error) {
+      setNotice(errorText(error));
+    } finally {
+      setStarting(false);
     }
   }
   async function start() {
@@ -429,15 +445,17 @@ export function App() {
                 </span>
                 <div>
                   <h2>
-                    {completed
-                      ? t("Done. Back to you.")
-                      : run.phase === "error"
-                        ? t("Couldn’t finish. Back to you.")
-                        : run.phase === "waiting"
-                          ? t("Your answer is needed")
-                          : run.interrupted
-                            ? t("You took over. The agent is paused.")
-                            : t("Paused. Back to you.")}
+                    {snapshot.can_restart_elevated
+                      ? t("Administrator rights needed")
+                      : completed
+                        ? t("Done. Back to you.")
+                        : run.phase === "error"
+                          ? t("Couldn’t finish. Back to you.")
+                          : run.phase === "waiting"
+                            ? t("Your answer is needed")
+                            : run.interrupted
+                              ? t("You took over. The agent is paused.")
+                              : t("Paused. Back to you.")}
                   </h2>
                   {!run.interrupted && (
                     <p>
@@ -449,18 +467,37 @@ export function App() {
                     </p>
                   )}
                   <p className="handoff-next">
-                    {completed
+                    {snapshot.can_restart_elevated
                       ? t(
-                          "Refine the result below, save what you learned, or start a new task.",
+                          "Windows will ask for permission. Your task and history are kept. Click Continue after the restart.",
                         )
-                      : run.phase === "waiting"
+                      : completed
                         ? t(
-                            "Answer below to continue, or save this workflow for later.",
+                            "Refine the result below, save what you learned, or start a new task.",
                           )
-                        : t(
-                            "Continue as is, or add a correction below. Nothing runs until you choose.",
-                          )}
+                        : run.phase === "waiting"
+                          ? t(
+                              "Answer below to continue, or save this workflow for later.",
+                            )
+                          : t(
+                              "Continue as is, or add a correction below. Nothing runs until you choose.",
+                            )}
                   </p>
+                  {snapshot.can_restart_elevated && (
+                    <Button
+                      variant="secondary"
+                      className="restart-button"
+                      disabled={starting || exporting || mic}
+                      onClick={() => void restartAsAdministrator()}
+                    >
+                      {starting ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <ShieldCheck size={16} />
+                      )}
+                      {t("Restart as administrator")}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

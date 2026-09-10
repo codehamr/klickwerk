@@ -13,6 +13,24 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  "Windows blocks input because this app has higher privileges than klickwerk. Restart klickwerk as administrator, or reopen the target app without administrator rights. A manual text entry will not unblock subsequent clicks.":
+    "Windows blockiert Eingaben, weil diese App höhere Rechte als klickwerk hat. Starte klickwerk als Administrator neu oder öffne die Ziel-App ohne Administratorrechte. Eine manuelle Texteingabe hebt die Sperre für spätere Klicks nicht auf.",
+  "Administrator rights needed": "Administratorrechte erforderlich",
+  "Restart as administrator": "Als Administrator neu starten",
+  "Windows will ask for permission. Your task and history are kept. Click Continue after the restart.":
+    "Windows fragt nach deiner Zustimmung. Aufgabe und Verlauf bleiben erhalten. Klicke nach dem Neustart auf Weiter.",
+  "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.":
+    "klickwerk wurde als Administrator neu gestartet. Klicke auf Weiter, um den aktuellen Desktop zu prüfen und die Aufgabe fortzusetzen.",
+  "The administrator restart failed. Your session is still open. You can retry or export its history.":
+    "Der Administrator-Neustart ist fehlgeschlagen. Deine Sitzung ist weiterhin geöffnet. Du kannst es erneut versuchen oder den Verlauf exportieren.",
+  "The administrator restart was cancelled. Your session is still open.":
+    "Der Administrator-Neustart wurde abgebrochen. Deine Sitzung ist weiterhin geöffnet.",
+  "This session is not available for an administrator restart.":
+    "Für diese Sitzung ist kein Administrator-Neustart verfügbar.",
+  "Finish the current activity before restarting klickwerk.":
+    "Beende die aktuelle Aktivität, bevor du klickwerk neu startest.",
+  "Administrator restart is available in the Windows app.":
+    "Der Administrator-Neustart ist in der Windows-App verfügbar.",
   "Includes the full history, window details and recent screenshots.":
     "Enthält den gesamten Verlauf, Fensterdetails und die letzten Screenshots.",
   "Windows blocks input to this app because it has higher privileges than klickwerk. Complete this step manually, or reopen the target normally if possible, then continue. Do not change Windows security settings.":

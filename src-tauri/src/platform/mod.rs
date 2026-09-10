@@ -3,6 +3,7 @@ pub mod capture;
 pub mod export;
 pub mod focus;
 pub mod input;
+pub mod restart;
 pub mod speech;
 pub mod window;
 

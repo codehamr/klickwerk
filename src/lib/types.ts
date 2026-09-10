@@ -67,6 +67,33 @@ export interface WorkflowDraft {
   warning?: string | null;
   workflow: Workflow;
 }
+export interface InputFailure {
+  code: string;
+  message: string;
+  target: {
+    window: {
+      handle: number;
+      process_id: number;
+      title: string;
+      class_name: string;
+      executable: string;
+      bounds: number[];
+      integrity_level: number | null;
+      elevated: boolean | null;
+      inspection_error: number | null;
+    };
+    sender_integrity_level: number | null;
+    input_block: string | null;
+  } | null;
+  win32_error: number | null;
+}
+export interface RecoveryEvent {
+  recorded_at: number;
+  kind: string;
+  source: string;
+  sender_integrity_level: number | null;
+  failure: InputFailure | null;
+}
 export interface Run {
   id: number;
   phase: Phase;
@@ -80,6 +107,8 @@ export interface Run {
   workflow_id: string | null;
   started_at: number;
   attempts: Attempt[];
+  recovery?: InputFailure | null;
+  recovery_events?: RecoveryEvent[];
 }
 export interface Attempt {
   number: number;
@@ -154,6 +183,8 @@ export interface Snapshot {
   locale: "en" | "de";
   workflows: WorkflowSummary[];
   workflow_error: string | null;
+  can_restart_elevated?: boolean;
+  restored_refinement?: string;
 }
 export interface Models {
   models: string[];
