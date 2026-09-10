@@ -7,6 +7,8 @@ pub struct Capture {
     pub frame: Frame,
     pub pixels: RgbImage,
     pub jpeg: Vec<u8>,
+    pub focused_control: usize,
+    pub excluded: [i32; 4],
 }
 
 pub fn layout() -> (i32, i32, u32, u32) {
@@ -29,6 +31,7 @@ pub fn capture(id: u64, max_edge: u32, excluded: [i32; 4]) -> Result<Capture, St
         return Err("This desktop layout exceeds the supported capture size.".into());
     }
     let foreground = unsafe { GetForegroundWindow() } as usize;
+    let focused_control = focused_control();
     let captured_ms = now();
     let mut pixels = read_pixels(left, top, width, height)?;
     if pixels
@@ -77,6 +80,8 @@ pub fn capture(id: u64, max_edge: u32, excluded: [i32; 4]) -> Result<Capture, St
         },
         pixels,
         jpeg,
+        focused_control,
+        excluded,
     })
 }
 
@@ -151,7 +156,30 @@ pub fn read_pixels(left: i32, top: i32, width: u32, height: u32) -> Result<RgbIm
     }
 }
 
-// Recheck a local target patch after the model response, before granting input.
+pub fn focused_control() -> usize {
+    unsafe {
+        let thread = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+        if thread == 0 {
+            return 0;
+        }
+        let mut info: GUITHREADINFO = std::mem::zeroed();
+        info.cbSize = size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(thread, &mut info) == 0 {
+            0
+        } else {
+            info.hwndFocus as usize
+        }
+    }
+}
+
+pub fn changed(before: &Capture, after: &Capture) -> bool {
+    before.frame.foreground != after.frame.foreground
+        || before.focused_control != after.focused_control
+        || (before.frame.left, before.frame.top) != (after.frame.left, after.frame.top)
+        || crate::settling::changed(&before.pixels, &after.pixels)
+}
+
+// Recheck content and keyboard focus after inference, before granting input.
 pub fn unchanged(capture: &Capture, action: &Action) -> Result<(), String> {
     let frame = &capture.frame;
     if layout() != (frame.left, frame.top, frame.width, frame.height) {
@@ -162,6 +190,23 @@ pub fn unchanged(capture: &Capture, action: &Action) -> Result<(), String> {
         if unsafe { GetForegroundWindow() } as usize != frame.foreground {
             return Err(
                 "The focused window changed. Start again when the desktop is ready.".into(),
+            );
+        }
+        if focused_control() != capture.focused_control {
+            return Err(
+                "The text field changed while the model was thinking. Observe again before typing."
+                    .into(),
+            );
+        }
+        let current = self::capture(
+            frame.id,
+            frame.image_width.max(frame.image_height),
+            capture.excluded,
+        )?;
+        if changed(capture, &current) {
+            return Err(
+                "The screen changed while the model was thinking. Observe again before typing."
+                    .into(),
             );
         }
         return Ok(());

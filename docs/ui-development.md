@@ -6,20 +6,23 @@ The banner identifies this mode. Preview settings and saved workflows use the br
 API keys are never persisted by the preview adapter.
 
 The visual system lives in `src/styles.css`: semantic light/dark variables,
-spacing, typography, component states, focus rings, reduced motion, and forced-color
+spacing, typography, component states, focus rings, motion, and forced-color
 support. UI components remain local and editable. Radix provides dialog focus
-management, tooltips, and switch semantics. Use English UI text and identifiers.
+management and tooltips. Keep identifiers and translation keys English. Provide
+German UI translations in `src/lib/i18n.ts` and bilingual tasks in `src/lib/suggestions.ts`.
 
 Extend both the native bridge types and browser fixture adapter when adding a new
 state. Exercise empty, loading, running, waiting, stopped, done, and error states.
 The preview query `?scenario=ask` shows a question; `?scenario=error` shows a server
-failure. These fixture scenarios exist only in the browser adapter.
+failure; `?learning=error` tests finalization failure and explicit fallback saving.
+These fixture scenarios exist only in the browser adapter.
 
 `npm test` exercises behavior and axe accessibility checks and writes screenshots
 to `build/visual/`. Tests cover dialog focus, mouse/keyboard takeover, countdown
 cancellation, unified URLs, settings persistence, multilingual task preservation,
-compact completion, questions, error recovery, correction continuity, workflow
-saving/editing/deletion, dark mode, reduced motion, and narrow layouts.
+persistent success handoff, questions, error recovery, correction continuity, workflow
+finalization/editing/deletion, stale draft refusal, language detection/override,
+dark mode and narrow layouts.
 On Linux, an installed `/usr/bin/chromium` can be used; otherwise run
 `npx playwright install --with-deps chromium`. `PLAYWRIGHT_CHROMIUM_EXECUTABLE`
 can select another test browser binary.

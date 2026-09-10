@@ -787,7 +787,7 @@ textarea::placeholder {
 .workflow-card-top svg {
   flex-shrink: 0;
 }
-.workflow-card > p {
+.workflow-open > p {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.7;
@@ -1108,55 +1108,6 @@ input::placeholder {
   padding: 8px;
   min-width: 110px;
 }
-.switch {
-  position: relative;
-  background: var(--border);
-  width: 34px;
-  height: 20px;
-  border: 0;
-  border-radius: 15px;
-  flex-shrink: 0;
-}
-.switch[data-state="checked"] {
-  background: var(--accent);
-}
-.switch-thumb {
-  display: block;
-  width: 16px;
-  height: 16px;
-  background: white;
-  border-radius: 50%;
-  transform: translateX(2px);
-  transition: transform 0.15s;
-  box-shadow: 0 1px 3px #0002;
-}
-.switch-thumb[data-state="checked"] {
-  transform: translateX(16px);
-}
-.workflow-memory,
-.workflow-history {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  margin: 15px 0;
-}
-.workflow-memory > summary,
-.workflow-history > summary {
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--muted);
-}
-.workflow-memory > summary svg {
-  display: inline;
-  vertical-align: middle;
-  margin: 0 4px;
-  color: var(--accent);
-}
-.workflow-history .timeline {
-  border: 0;
-  padding-top: 4px;
-  margin-top: 18px;
-}
 .workflow-footer {
   gap: 8px;
   flex-wrap: wrap;
@@ -1399,27 +1350,9 @@ input::placeholder {
     font-size: 11px;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-:root[data-reduce-motion="true"] *,
-:root[data-reduce-motion="true"] *::before,
-:root[data-reduce-motion="true"] *::after {
-  animation-duration: 0.01ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.01ms !important;
-}
 @media (forced-colors: active) {
   .button,
   .brand-mark,
-  .switch,
   .timeline-icon {
     border: 1px solid ButtonText;
   }
@@ -1427,7 +1360,86 @@ input::placeholder {
   .recording-dot {
     background: Highlight;
   }
-  .switch[data-state="checked"] {
+  .status-dot.configured {
     background: Highlight;
+  }
+}
+
+.workflow-card {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+.workflow-open {
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 18px 44px 18px 18px;
+  text-align: left;
+}
+.workflow-delete {
+  position: absolute;
+  right: 8px;
+  top: 10px;
+  display: grid;
+  place-items: center;
+  padding: 9px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+}
+.workflow-delete:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.delete-confirmation {
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.delete-confirmation p {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+.delete-confirmation .button + .button {
+  margin-left: 8px;
+}
+.handoff {
+  animation: handoff-in 0.35s ease-out;
+  background: var(--accent-light);
+  border-bottom: 1px solid var(--border);
+}
+.handoff-done {
+  border-top: 4px solid var(--success);
+}
+.handoff-error {
+  border-top: 4px solid var(--danger);
+}
+.handoff-stopped,
+.handoff-waiting {
+  border-top: 4px solid var(--accent);
+}
+.handoff-done .refinement-icon {
+  color: var(--success);
+}
+.handoff-error .refinement-icon {
+  color: var(--danger);
+}
+.handoff .handoff-next {
+  margin-top: 10px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.history-toggle {
+  margin: 16px 0;
+}
+@keyframes handoff-in {
+  from {
+    transform: translateY(-8px);
+  }
+  to {
+    transform: translateY(0);
   }
 }

@@ -2,6 +2,7 @@ pub mod action;
 pub mod config;
 pub mod guard;
 pub mod provider;
+pub mod settling;
 pub mod workflow;
 
 #[cfg(windows)]

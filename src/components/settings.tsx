@@ -1,5 +1,5 @@
+import { useI18n } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
-import * as Switch from "@radix-ui/react-switch";
 import {
   ChevronDown,
   Eye,
@@ -32,6 +32,7 @@ export function SettingsDialog({
   onSaved,
   returnFocus,
 }: Props) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState<SettingsData>(snapshot.settings);
   const [key, setKey] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
@@ -101,8 +102,14 @@ export function SettingsDialog({
       setNotice({
         kind: "info",
         text: result.models.length
-          ? `${result.models.length} models found${result.partial ? " (partial list)" : ""}. Choose one with vision support.`
-          : "No models found. You can still enter an exact model ID.",
+          ? t(
+              "{count} models found{partial}. Choose one with vision support.",
+              {
+                count: result.models.length,
+                partial: result.partial ? t(" (partial list)") : "",
+              },
+            )
+          : t("No models found. You can still enter an exact model ID."),
       });
     } catch (error) {
       if (request.current === id)
@@ -156,8 +163,10 @@ export function SettingsDialog({
       }}
     >
       <DialogContent
-        title="Your connection"
-        description="Enter your server URL and choose a vision model."
+        title={t("Your connection")}
+        description={t(
+          "Enter your server URL, add a key if needed, then choose a vision model.",
+        )}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           returnFocus();
@@ -166,7 +175,7 @@ export function SettingsDialog({
         <div
           className="settings-tabs"
           role="tablist"
-          aria-label="Settings sections"
+          aria-label={t("Settings sections")}
         >
           <button
             type="button"
@@ -177,7 +186,7 @@ export function SettingsDialog({
             onClick={() => setTab("connection")}
           >
             <Wifi size={16} />
-            Connection
+            {t("Connection")}
           </button>
           <button
             type="button"
@@ -188,7 +197,7 @@ export function SettingsDialog({
             onClick={() => setTab("preferences")}
           >
             <SlidersHorizontal size={16} />
-            Preferences
+            {t("Preferences")}
           </button>
         </div>
         <div className="settings-body">
@@ -200,7 +209,7 @@ export function SettingsDialog({
             >
               <div className="field">
                 <div className="label-row">
-                  <label htmlFor="server-url">Server URL</label>
+                  <label htmlFor="server-url">{t("Server URL")}</label>
                 </div>
                 <input
                   id="server-url"
@@ -209,55 +218,13 @@ export function SettingsDialog({
                   autoComplete="off"
                   value={draft.base_url}
                   onChange={(e) => update("base_url", e.target.value)}
-                  onBlur={(event) => {
-                    if (event.relatedTarget instanceof HTMLButtonElement)
-                      return;
-                    if (draft.base_url.trim() && !busy) void loadModels();
-                  }}
-                  placeholder="localhost:11434 or https://your-server/v1"
+                  placeholder={t("localhost:11434 or https://your-server/v1")}
                 />
               </div>
               <div className="field">
-                <div className="label-row">
-                  <label htmlFor="model-id">Vision model</label>
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={!!busy}
-                    onClick={() => void loadModels()}
-                  >
-                    <RefreshCw
-                      size={13}
-                      className={busy === "models" ? "spin" : ""}
-                    />
-                    Load models
-                  </button>
-                </div>
-                <div className="input-with-icon">
-                  <input
-                    id="model-id"
-                    list="available-models"
-                    spellCheck={false}
-                    autoComplete="off"
-                    value={draft.model}
-                    onChange={(e) => update("model", e.target.value)}
-                    placeholder="Choose or enter a model ID"
-                  />
-                  <ChevronDown size={16} />
-                </div>
-                <datalist id="available-models">
-                  {models.map((model) => (
-                    <option key={model} value={model} />
-                  ))}
-                </datalist>
-                <p className="field-hint">
-                  Choose a model that can understand images. Exact model IDs
-                  also work.
-                </p>
-              </div>
-              <div className="field">
                 <label htmlFor="api-key">
-                  API key <span className="optional">optional</span>
+                  {t("API key")}
+                  <span className="optional">{t("optional")}</span>
                 </label>
                 <div className="password-input">
                   <input
@@ -268,6 +235,7 @@ export function SettingsDialog({
                     value={key ?? ""}
                     onChange={(e) => {
                       setKey(e.target.value);
+                      setModels([]);
                       setNotice(null);
                       if (request.current) {
                         void api.cancelRequest(request.current);
@@ -277,13 +245,13 @@ export function SettingsDialog({
                     }}
                     placeholder={
                       snapshot.has_api_key && key === null
-                        ? "Saved securely on this Windows account"
-                        : "Only if your server requires one"
+                        ? t("Saved securely on this Windows account")
+                        : t("Only if your server requires one")
                     }
                   />
                   <button
                     type="button"
-                    aria-label={showKey ? "Hide API key" : "Show API key"}
+                    aria-label={showKey ? t("Hide API key") : t("Show API key")}
                     onClick={() => setShowKey(!showKey)}
                   >
                     {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
@@ -293,11 +261,61 @@ export function SettingsDialog({
                   <button
                     type="button"
                     className="text-button remove-key"
-                    onClick={() => setKey("")}
+                    onClick={() => {
+                      setKey("");
+                      setModels([]);
+                      if (request.current)
+                        void api.cancelRequest(request.current);
+                      request.current = "";
+                      setBusy(null);
+                    }}
                   >
-                    Remove saved key
+                    {t("Remove saved key")}
                   </button>
                 )}
+              </div>
+              <div className="field">
+                <div className="label-row">
+                  <label htmlFor="model-id">{t("Vision model")}</label>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={!!busy}
+                    onClick={() => void loadModels()}
+                  >
+                    <RefreshCw
+                      size={13}
+                      className={busy === "models" ? "spin" : ""}
+                    />
+                    {t("Load models")}
+                  </button>
+                </div>
+                <div className="input-with-icon">
+                  <input
+                    id="model-id"
+                    list="available-models"
+                    onFocus={() => {
+                      if (!busy && !models.length && draft.base_url.trim())
+                        void loadModels();
+                    }}
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={draft.model}
+                    onChange={(e) => update("model", e.target.value)}
+                    placeholder={t("Choose or enter a model ID")}
+                  />
+                  <ChevronDown size={16} />
+                </div>
+                <datalist id="available-models">
+                  {models.map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+                <p className="field-hint">
+                  {t(
+                    "Choose a model that can understand images. Exact model IDs also work.",
+                  )}
+                </p>
               </div>
               <div className="test-row">
                 <Button
@@ -311,12 +329,12 @@ export function SettingsDialog({
                   ) : (
                     <Unplug size={15} />
                   )}
-                  Test connection
+                  {t("Test connection")}
                 </Button>
                 <span>
-                  Uses a test image.
+                  {t("Uses a test image.")}
                   <br />
-                  Your desktop stays private during this check.
+                  {t("Your desktop stays private during this check.")}
                 </span>
               </div>
             </section>
@@ -328,8 +346,28 @@ export function SettingsDialog({
             >
               <div className="preference-row">
                 <div>
-                  <label htmlFor="theme">Appearance</label>
-                  <p>Match your workspace.</p>
+                  <label htmlFor="language">{t("Language")}</label>
+                  <p>{t("Use your desktop language or choose your own.")}</p>
+                </div>
+                <select
+                  id="language"
+                  value={draft.language}
+                  onChange={(e) =>
+                    update(
+                      "language",
+                      e.target.value as SettingsData["language"],
+                    )
+                  }
+                >
+                  <option value="system">{t("Automatic")}</option>
+                  <option value="de">{t("Deutsch")}</option>
+                  <option value="en">{t("English")}</option>
+                </select>
+              </div>
+              <div className="preference-row">
+                <div>
+                  <label htmlFor="theme">{t("Appearance")}</label>
+                  <p>{t("Match your workspace.")}</p>
                 </div>
                 <select
                   id="theme"
@@ -338,29 +376,15 @@ export function SettingsDialog({
                     update("theme", e.target.value as SettingsData["theme"])
                   }
                 >
-                  <option value="system">System</option>
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
+                  <option value="system">{t("System")}</option>
+                  <option value="light">{t("Light")}</option>
+                  <option value="dark">{t("Dark")}</option>
                 </select>
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="motion">Reduce motion</label>
-                  <p>Keep transitions quiet.</p>
-                </div>
-                <Switch.Root
-                  id="motion"
-                  className="switch"
-                  checked={draft.reduce_motion}
-                  onCheckedChange={(value) => update("reduce_motion", value)}
-                >
-                  <Switch.Thumb className="switch-thumb" />
-                </Switch.Root>
-              </div>
-              <div className="preference-row">
-                <div>
-                  <label htmlFor="detail">Screen detail</label>
-                  <p>More detail sends larger images.</p>
+                  <label htmlFor="detail">{t("Screen detail")}</label>
+                  <p>{t("More detail sends larger images.")}</p>
                 </div>
                 <select
                   id="detail"
@@ -369,15 +393,15 @@ export function SettingsDialog({
                     update("screenshot_max_edge", Number(e.target.value))
                   }
                 >
-                  <option value="960">Fast</option>
-                  <option value="1280">Balanced</option>
-                  <option value="1920">Detailed</option>
+                  <option value="960">{t("Fast")}</option>
+                  <option value="1280">{t("Balanced")}</option>
+                  <option value="1920">{t("Detailed")}</option>
                 </select>
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="timeout">Response timeout</label>
-                  <p>Time allowed for each model response.</p>
+                  <label htmlFor="timeout">{t("Response timeout")}</label>
+                  <p>{t("Time allowed for each model response.")}</p>
                 </div>
                 <select
                   id="timeout"
@@ -399,15 +423,16 @@ export function SettingsDialog({
                     .sort((a, b) => a - b)
                     .map((value) => (
                       <option key={value} value={value}>
-                        {value} seconds
+                        {value}
+                        {t("seconds")}
                       </option>
                     ))}
                 </select>
               </div>
               <div className="preference-row">
                 <div>
-                  <label htmlFor="max-steps">Task limit</label>
-                  <p>Stops automatically after this many steps.</p>
+                  <label htmlFor="max-steps">{t("Task limit")}</label>
+                  <p>{t("Stops automatically after this many steps.")}</p>
                 </div>
                 <select
                   id="max-steps"
@@ -418,7 +443,8 @@ export function SettingsDialog({
                     .sort((a, b) => a - b)
                     .map((value) => (
                       <option key={value} value={value}>
-                        {value} steps
+                        {value}
+                        {t("steps")}
                       </option>
                     ))}
                 </select>
@@ -430,7 +456,7 @@ export function SettingsDialog({
               className={`notice notice-${notice.kind}`}
               role={notice.kind === "error" ? "alert" : "status"}
             >
-              {notice.text}
+              {t(notice.text)}
               {busy === "test" && (
                 <button
                   onClick={() => {
@@ -439,14 +465,14 @@ export function SettingsDialog({
                     setBusy(null);
                   }}
                 >
-                  Cancel
+                  {t("Cancel")}
                 </button>
               )}
             </div>
           )}
           {busy === "test" && (
             <div className="notice notice-info" role="status">
-              Checking image understanding…{" "}
+              {t("Checking image understanding…")}{" "}
               <button
                 className="text-button"
                 onClick={() => {
@@ -455,13 +481,13 @@ export function SettingsDialog({
                   setBusy(null);
                 }}
               >
-                Cancel
+                {t("Cancel")}
               </button>
             </div>
           )}
           {snapshot.config_error && (
             <div className="notice notice-error" role="alert">
-              {snapshot.config_error}
+              {t(snapshot.config_error)}
             </div>
           )}
         </div>
@@ -470,13 +496,13 @@ export function SettingsDialog({
             <FolderLock size={15} />
             <span title={snapshot.config_path}>
               {snapshot.platform === "preview"
-                ? "Preview settings"
-                : "Saved beside the app in config.cfg"}
+                ? t("Preview settings")
+                : t("Saved beside the app in config.cfg")}
             </span>
           </div>
           <Button disabled={!!busy} onClick={() => void save()}>
-            {busy === "save" && <LoaderCircle className="spin" size={16} />}Save
-            settings
+            {busy === "save" && <LoaderCircle className="spin" size={16} />}
+            {t("Save settings")}
           </Button>
         </div>
       </DialogContent>

@@ -65,6 +65,7 @@ pub struct Snapshot {
     config_error: Option<String>,
     run: RunView,
     platform: &'static str,
+    locale: &'static str,
     workflows: Vec<WorkflowSummary>,
     workflow_error: Option<String>,
 }
@@ -107,6 +108,14 @@ impl AppState {
             config_error,
             run,
             platform: "windows",
+            locale: if unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() }
+                & 0x03ff
+                == 7
+            {
+                "de"
+            } else {
+                "en"
+            },
             workflows,
             workflow_error,
         }
@@ -249,17 +258,29 @@ fn start_task(
     if let Some(id) = resume_run_id {
         if view.id != id
             || view.task != task
-            || !["stopped", "waiting", "error"].contains(&view.phase.as_str())
+            || !["stopped", "waiting", "error", "done"].contains(&view.phase.as_str())
         {
             return Err(
                 "This correction no longer belongs to the current task. Start a new task.".into(),
             );
         }
-        let answer = reply
-            .filter(|s| !s.trim().is_empty())
-            .ok_or("Describe what to change before continuing.")?;
+        if view.steps.len() >= workflow::MAX_STEPS - 2 {
+            return Err(
+                "This session is full. Save it as a workflow and start a fresh run.".into(),
+            );
+        }
+        let answer = reply.unwrap_or_default();
         let elapsed = view.elapsed_ms;
-        workflow::add_correction(&mut view.steps, &answer, elapsed)?;
+        if answer.trim().is_empty() {
+            if view.phase == "waiting" || view.phase == "done" {
+                return Err("Enter an answer or refinement before continuing.".into());
+            }
+            let step_id = view.steps.len() as u32 + 1;
+            view.steps.push(Step::note(step_id, "system",
+                "The user explicitly chose to continue without a correction. Inspect the current desktop and verify the last action before proceeding; do not repeat input blindly.", elapsed));
+        } else {
+            workflow::add_correction(&mut view.steps, &answer, elapsed)?;
+        }
     } else {
         if reply.is_some() {
             return Err("A correction must refer to its original task.".into());
@@ -267,8 +288,7 @@ fn start_task(
         let mut session = Session::default();
         if let Some(id) = &workflow_id {
             let saved = state.workflows.lock().unwrap().get(id)?;
-            session.memory = saved.learning.memory;
-            session.prior_steps = saved.steps;
+            session.memory = saved.learning.prompt;
         }
         *state.session.lock().unwrap() = session;
         *view = RunView {
@@ -278,6 +298,7 @@ fn start_task(
             ..RunView::default()
         };
     }
+    state.drafts.lock().unwrap().clear();
     view.phase = "checking".into();
     view.interrupted = false;
     view.question.clear();
@@ -304,158 +325,219 @@ fn get_workflow(id: String, state: tauri::State<AppState>) -> Result<Workflow, S
 struct WorkflowDraft {
     token: String,
     workflow: Workflow,
+    warning: Option<String>,
 }
 
 #[derive(Clone)]
 struct PreparedWorkflow {
-    run_id: u64,
+    run_id: Option<u64>,
     source_steps: usize,
+    source_workflow: Option<(String, u64)>,
     correction: Option<String>,
     workflow: Workflow,
+}
+
+fn validate_draft(state: &AppState, draft: &PreparedWorkflow) -> Result<(), String> {
+    if let Some(run_id) = draft.run_id {
+        let view = state.view.lock().unwrap();
+        if view.id != run_id
+            || view.workflow_id.as_ref() != draft.source_workflow.as_ref().map(|(id, _)| id)
+            || view.steps.len() != draft.source_steps
+            || !["stopped", "done", "waiting", "error"].contains(&view.phase.as_str())
+        {
+            return Err("This session changed. Save again to include the latest changes.".into());
+        }
+    }
+    if let Some((id, updated_at)) = &draft.source_workflow
+        && state.workflows.lock().unwrap().get(id)?.updated_at != *updated_at
+    {
+        return Err("This workflow changed. Open it again before saving.".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn prepare_workflow(
     app: tauri::AppHandle,
-    run_id: u64,
+    run_id: Option<u64>,
+    id: Option<String>,
     correction: Option<String>,
+    learning: Learning,
     request_id: String,
 ) -> Result<WorkflowDraft, String> {
-    let (view, session, settings) = {
+    learning.validate()?;
+    let correction = correction.filter(|s| !s.trim().is_empty());
+    let (mut draft, task, memory, steps, outcome, settings) = {
         let state = app.state::<AppState>();
         let active = state.active.lock().unwrap();
         if active.is_some() {
             return Err("Take over before saving this workflow.".into());
         }
         let view = state.view.lock().unwrap().clone();
-        if view.id != run_id
-            || !["stopped", "done", "waiting", "error"].contains(&view.phase.as_str())
+        if run_id.is_some_and(|id| id != view.id)
+            || (run_id.is_some()
+                && !["stopped", "done", "waiting", "error"].contains(&view.phase.as_str()))
         {
             return Err("This task is no longer available to save.".into());
         }
-        let session = state.session.lock().unwrap().clone();
+        let saved_id = if run_id.is_some() {
+            view.workflow_id.clone()
+        } else {
+            id
+        };
+        let saved = saved_id
+            .as_ref()
+            .map(|id| state.workflows.lock().unwrap().get(id))
+            .transpose()?;
+        if run_id.is_none() && saved.is_none() {
+            return Err("Choose a workflow or session to save.".into());
+        }
+        let source_steps = if run_id.is_some() {
+            view.steps.len()
+        } else {
+            0
+        };
+        let mut steps = if run_id.is_some() {
+            view.steps.clone()
+        } else {
+            vec![]
+        };
+        if let Some(text) = &correction {
+            workflow::add_correction(&mut steps, text, view.elapsed_ms)?;
+        }
+        let memory = if run_id.is_some() {
+            state.session.lock().unwrap().memory.clone()
+        } else {
+            saved
+                .as_ref()
+                .map(|w| w.learning.prompt.clone())
+                .unwrap_or_default()
+        };
+        let task = if run_id.is_some() {
+            view.task.clone()
+        } else {
+            saved.as_ref().unwrap().learning.prompt.clone()
+        };
+        let outcome = if run_id.is_some() {
+            format!(
+                "Phase: {}\nMessage: {}\nResult: {}\nOpen question: {}\nUser takeover: {}",
+                view.phase, view.message, view.result, view.question, view.interrupted
+            )
+        } else {
+            "Editing saved instructions; no new run has been performed.".into()
+        };
+        let draft = PreparedWorkflow {
+            run_id,
+            source_steps,
+            source_workflow: saved.as_ref().map(|w| (w.id.clone(), w.updated_at)),
+            correction,
+            workflow: Workflow {
+                id: saved_id.unwrap_or_else(|| {
+                    format!("workflow-{}-{}", platform::now(), run_id.unwrap_or(0))
+                }),
+                learning: learning.clone(),
+                updated_at: 0,
+            },
+        };
         let settings = state.config.lock().unwrap().settings.clone();
-        (view, session, settings)
+        (draft, task, memory, steps, outcome, settings)
     };
-    let source_steps = view.steps.len();
-    let correction = correction.filter(|s| !s.trim().is_empty());
-    let mut current_steps = view.steps;
-    if let Some(correction) = &correction {
-        workflow::add_correction(&mut current_steps, correction, view.elapsed_ms)?;
-    }
-    let mut steps = session.prior_steps;
-    if !steps.is_empty() {
-        steps.push(Step::note(
-            0,
-            "system",
-            "A new desktop instance started. The following actions belong to the latest run.",
-            0,
-        ));
-    }
-    steps.extend(current_steps);
-    if steps.len() > workflow::MAX_STEPS {
-        return Err("This workflow has reached its history limit. Start a new workflow.".into());
-    }
-    for (i, step) in steps.iter_mut().enumerate() {
-        step.id = i as u32 + 1;
-    }
     let provider = Provider::new(&settings)?;
-    let learning = network(
+    let result = network(
         app.clone(),
         request_id.clone(),
-        provider.learn(&view.task, &session.memory, &steps),
+        provider.learn(&task, &memory, &steps, &outcome, &learning),
     )
-    .await?;
-    let workflow = Workflow {
-        id: view
-            .workflow_id
-            .unwrap_or_else(|| format!("workflow-{}-{}", platform::now(), run_id)),
-        learning,
-        task: view.task,
-        steps,
-        updated_at: 0,
+    .await;
+    let warning = match result {
+        Ok(learned) => {
+            draft.workflow.learning = learned;
+            None
+        }
+        Err(error) => {
+            draft.workflow.learning = workflow::fallback_prompt(&memory, &steps, &learning);
+            draft.workflow.learning.validate()?;
+            Some(error)
+        }
     };
     let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if active.is_some() {
+        return Err("The task resumed. Take over before saving.".into());
+    }
+    validate_draft(&state, &draft)?;
+    let workflow = draft.workflow.clone();
     let mut drafts = state.drafts.lock().unwrap();
     if drafts.len() >= 8 {
         drafts.clear();
     }
-    drafts.insert(
-        request_id.clone(),
-        PreparedWorkflow {
-            run_id,
-            source_steps,
-            correction,
-            workflow: workflow.clone(),
-        },
-    );
+    drafts.insert(request_id.clone(), draft);
     Ok(WorkflowDraft {
         token: request_id,
         workflow,
+        warning,
     })
 }
 
 #[tauri::command]
-fn save_workflow(
-    app: tauri::AppHandle,
-    token: Option<String>,
-    id: Option<String>,
-    learning: Learning,
-) -> Result<Workflow, String> {
+fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, String> {
     let state = app.state::<AppState>();
     let active = state.active.lock().unwrap();
     if active.is_some() {
         return Err("Take over before editing workflows.".into());
     }
-    let (source, mut workflow) = if let Some(token) = &token {
-        state
-            .drafts
-            .lock()
-            .unwrap()
-            .get(token)
-            .cloned()
-            .map(|draft| (Some(draft.clone()), draft.workflow))
-            .ok_or("This workflow draft has expired. Prepare it again.")?
-    } else {
-        (
-            None,
-            state
-                .workflows
-                .lock()
-                .unwrap()
-                .get(&id.ok_or("Choose a workflow to edit.")?)?,
-        )
-    };
-    workflow.learning = learning;
-    let saved = state.workflows.lock().unwrap().save(workflow)?;
-    if let Some(source) = source {
+    let source = state
+        .drafts
+        .lock()
+        .unwrap()
+        .get(&token)
+        .cloned()
+        .ok_or("This workflow draft has expired. Prepare it again.")?;
+    validate_draft(&state, &source)?;
+    let saved = state.workflows.lock().unwrap().save(source.workflow)?;
+    if source.run_id.is_some() {
         let mut view = state.view.lock().unwrap();
-        if view.id == source.run_id && view.steps.len() == source.source_steps {
-            if let Some(correction) = source.correction {
-                let elapsed = view.elapsed_ms;
-                // The draft validated this correction before the model request.
-                workflow::add_correction(&mut view.steps, &correction, elapsed)?;
-            }
-            view.workflow_id = Some(saved.id.clone());
-            state.session.lock().unwrap().memory = saved.learning.memory.clone();
+        if let Some(correction) = source.correction {
+            let elapsed = view.elapsed_ms;
+            workflow::add_correction(&mut view.steps, &correction, elapsed)?;
         }
+        view.workflow_id = Some(saved.id.clone());
+        state.session.lock().unwrap().memory = saved.learning.prompt.clone();
     }
-    if let Some(token) = token {
-        state.drafts.lock().unwrap().remove(&token);
-    }
+    state.drafts.lock().unwrap().remove(&token);
     drop(active);
     emit(&app);
     Ok(saved)
+}
+
+fn clear_session(state: &AppState) {
+    *state.view.lock().unwrap() = RunView::default();
+    *state.session.lock().unwrap() = Session::default();
+    state.drafts.lock().unwrap().clear();
+}
+
+#[tauri::command]
+fn reset_session(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if active.is_some() || state.speech.lock().unwrap().is_some() {
+        return Err("Finish the current activity before starting a fresh session.".into());
+    }
+    clear_session(&state);
+    drop(active);
+    emit(&app);
+    Ok(())
 }
 
 #[tauri::command]
 fn delete_workflow(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<AppState>();
     let active = state.active.lock().unwrap();
-    if active.is_some() {
-        return Err("Take over before editing workflows.".into());
+    if active.is_some() || state.speech.lock().unwrap().is_some() {
+        return Err("Finish the current activity before deleting workflows.".into());
     }
     state.workflows.lock().unwrap().delete(&id)?;
+    clear_session(&state);
     drop(active);
     emit(&app);
     Ok(())
@@ -712,16 +794,42 @@ fn run_context(app: &tauri::AppHandle) -> String {
     let state = app.state::<AppState>();
     let steps = state.view.lock().unwrap().steps.clone();
     let session = state.session.lock().unwrap();
-    let memory = if session.prior_steps.is_empty() {
-        session.memory.clone()
-    } else {
-        format!(
-            "{}\n\nEvidence from a PREVIOUS desktop instance; locate every target again:\n{}",
-            session.memory,
-            workflow::context("", &session.prior_steps)
-        )
-    };
-    workflow::context(&memory, &steps)
+    workflow::context(&session.memory, &steps)
+}
+
+async fn stable_capture(
+    broker: &mut BrokerClient,
+    app: &tauri::AppHandle,
+    cancel: &AtomicBool,
+    id: u64,
+    max_edge: u32,
+) -> Result<capture::Capture, End> {
+    let mut previous: Option<capture::Capture> = None;
+    let mut settling = crate::settling::Settler::new(platform::now());
+    loop {
+        let excluded = broker.bounds;
+        let screen = broker
+            .during(app, cancel, async move {
+                tokio::task::spawn_blocking(move || capture::capture(id, max_edge, excluded))
+                    .await
+                    .map_err(|_| "The capture worker stopped unexpectedly.".to_owned())?
+            })
+            .await?;
+        let changed = previous
+            .as_ref()
+            .is_none_or(|before| capture::changed(before, &screen));
+        match settling.observe(platform::now(), changed) {
+            crate::settling::Status::Ready => return Ok(screen),
+            crate::settling::Status::TimedOut => return Err(End::Question("The screen is still changing. Wait for the app to finish loading, then tell me to continue.".into())),
+            crate::settling::Status::Waiting => previous = Some(screen),
+        }
+        broker
+            .during(app, cancel, async {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                Ok(())
+            })
+            .await?;
+    }
 }
 
 async fn controller(
@@ -753,16 +861,12 @@ async fn controller(
         let mut previous_image = 0u64;
         let mut unchanged_frames = 0;
         let mut moved_targets = 0;
+        let mut last_input: Option<(Action, capture::Capture)> = None;
         for _ in 0..settings.max_steps {
             let step = app.state::<AppState>().view.lock().unwrap().steps.len() as u32 + 1;
             if step as usize >= workflow::MAX_STEPS - 2 { return Err(End::Question("This session is full. Save it as a workflow to continue in a fresh run.".into())); }
-            progress(&app, "running", "Taking a look at your desktop…", started);
-            let excluded = broker.bounds;
-            let max_edge = settings.screenshot_max_edge;
-            let screen = broker.during(&app, &cancel, async move {
-                tokio::task::spawn_blocking(move || capture::capture(step as u64, max_edge, excluded)).await
-                    .map_err(|_| "The capture worker stopped unexpectedly.".to_owned())?
-            }).await?;
+            progress(&app, "running", "Waiting for the desktop to settle…", started);
+            let screen = stable_capture(&mut broker, &app, &cancel, step as u64, settings.screenshot_max_edge).await?;
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             screen.jpeg.hash(&mut hash);
@@ -775,6 +879,12 @@ async fn controller(
             let decision = broker.during(&app, &cancel, provider.decide(&task, &history, provider::Observation {
                 frame_id: screen.frame.id, bytes: &screen.jpeg, width: screen.frame.image_width, height: screen.frame.image_height, mime: "image/jpeg",
             })).await?;
+            if let Some((last_action, before)) = &last_input
+                && matches!(decision.action, Action::Click { .. } | Action::DoubleClick { .. } | Action::Text { .. } | Action::Key { .. })
+                    && serde_json::to_value(last_action).ok() == serde_json::to_value(&decision.action).ok()
+                    && !capture::changed(before, &screen) {
+                return Err(End::Question("The last input has no visible result yet. I paused to avoid sending it twice. Check the app, then tell me how to continue.".into()));
+            }
             progress(&app, "running", &decision.description, started);
             record(&app, Step::action(step, decision.description, decision.action.clone(), &screen.frame, started.elapsed().as_millis() as u64));
             match &decision.action {
@@ -797,8 +907,8 @@ async fn controller(
                     let check_action = action.clone();
                     let mut frame = screen.frame.clone();
                     // Revalidation failure is recoverable: observe again without clicking a moved target.
-                    let checked = broker.during(&app, &cancel, async move {
-                        tokio::task::spawn_blocking(move || Ok(capture::unchanged(&screen, &check_action))).await
+                    let (screen, checked) = broker.during(&app, &cancel, async move {
+                        tokio::task::spawn_blocking(move || { let checked = capture::unchanged(&screen, &check_action); Ok((screen, checked)) }).await
                             .map_err(|_| "The target check failed.".to_owned())?
                     }).await?;
                     if let Err(reason) = checked {
@@ -817,8 +927,7 @@ async fn controller(
                         _ => return Err(End::Failed("The input acknowledgement did not match this step.".into())),
                     }
                     action_status(&app, "completed");
-                    let settle = if matches!(action, Action::Text { .. } | Action::Move { .. }) { 80 } else { 180 };
-                    broker.during(&app, &cancel, async move { tokio::time::sleep(Duration::from_millis(settle)).await; Ok(()) }).await?;
+                    last_input = Some((action, screen));
                 }
             }
         }
@@ -849,12 +958,12 @@ async fn controller(
                 view.interrupted = message == "Stopped because you used the mouse or keyboard.";
                 view.phase = "stopped".into();
                 view.message = if view.interrupted {
-                    "You took over. Tell me what to do differently, and I’ll use your correction when we continue.".into()
+                    "You took over. The agent is paused. Continue when ready, or describe what to change.".into()
                 } else {
                     message
                 };
                 let note = if view.interrupted {
-                    "User took over with mouse or keyboard input. Treat the latest attempted action as a possible mistake. Wait for a correction; do not assume why it was wrong."
+                    "User took over with mouse or keyboard input. Treat the latest attempted action as a possible mistake. Wait for explicit permission to continue or a correction; do not assume why it was wrong."
                 } else {
                     "The run stopped. Check the last action and the current desktop before continuing."
                 };
@@ -881,6 +990,10 @@ async fn controller(
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
+        let _ = window.set_focus();
+        if !window.is_focused().unwrap_or(false) {
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+        }
     }
     emit(&app);
 }
@@ -940,6 +1053,7 @@ pub fn run() {
             prepare_workflow,
             save_workflow,
             delete_workflow,
+            reset_session,
             stop_task,
             start_dictation,
             stop_dictation

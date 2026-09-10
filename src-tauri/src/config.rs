@@ -20,6 +20,9 @@ pub struct Settings {
     pub request_timeout_seconds: u64,
     pub max_steps: u32,
     pub theme: String,
+    pub language: String,
+    // Accept old preferences without exposing or persisting the removed setting.
+    #[serde(skip_serializing)]
     pub reduce_motion: bool,
 }
 
@@ -35,6 +38,7 @@ impl Default for Settings {
             request_timeout_seconds: 120,
             max_steps: 50,
             theme: "system".into(),
+            language: "system".into(),
             reduce_motion: false,
         }
     }
@@ -56,6 +60,7 @@ impl Settings {
             || !(10..=300).contains(&self.request_timeout_seconds)
             || !(1..=100).contains(&self.max_steps)
             || !["system", "light", "dark"].contains(&self.theme.as_str())
+            || !["system", "en", "de"].contains(&self.language.as_str())
         {
             return Err("One of the preferences is outside its supported range.".into());
         }
@@ -68,6 +73,21 @@ impl Settings {
             return Err("Choose a vision model in Settings first.".into());
         }
         Ok(())
+    }
+
+    pub fn ui_language(&self) -> &'static str {
+        if self.language == "de" {
+            return "German";
+        }
+        if self.language == "system" {
+            #[cfg(windows)]
+            if unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() } & 0x03ff
+                == 7
+            {
+                return "German";
+            }
+        }
+        "English"
     }
 
     pub fn public(&self) -> Self {

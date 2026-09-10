@@ -1,13 +1,15 @@
+import { setLanguage, useI18n } from "./lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   BookOpen,
   Check,
+  Pause,
+  CircleAlert,
+  Trash2,
   ChevronDown,
   CircleHelp,
   Command,
-  FileText,
-  Globe2,
   LoaderCircle,
   Mic,
   Monitor,
@@ -15,7 +17,6 @@ import {
   Plus,
   Settings2,
   Sparkles,
-  WandSparkles,
   X,
 } from "lucide-react";
 import { api, native } from "./lib/bridge";
@@ -26,31 +27,11 @@ import { Tooltip, TooltipProvider } from "./components/ui/tooltip";
 import { SettingsDialog } from "./components/settings";
 import { Timeline } from "./components/timeline";
 import { WorkflowDialog, type WorkflowSource } from "./components/workflow";
-
-const suggestions = [
-  {
-    icon: FileText,
-    title: "Draft a note",
-    detail: "Get a first draft on the page",
-    prompt:
-      "Open a text editor and draft a short, friendly welcome note for a new team member. Leave it open for me to review.",
-  },
-  {
-    icon: Globe2,
-    title: "Find an answer",
-    detail: "Let me handle the browsing",
-    prompt:
-      "Open my browser and search for easy vegetarian dinner ideas. Leave the results open for me.",
-  },
-  {
-    icon: WandSparkles,
-    title: "Do the small things",
-    detail: "A little less busywork",
-    prompt: "Open Calculator and work out 18% of 245. Show me the result.",
-  },
-];
+import { taskSuggestions } from "./lib/suggestions";
 
 export function App() {
+  const { t, language } = useI18n();
+  const suggestions = taskSuggestions(language);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [fatal, setFatal] = useState("");
   const [task, setTask] = useState("");
@@ -62,6 +43,7 @@ export function App() {
   const [mic, setMic] = useState(false);
   const [dismissedRun, setDismissedRun] = useState(-1);
   const [completedDetails, setCompletedDetails] = useState(false);
+  const [deletingWorkflow, setDeletingWorkflow] = useState<string | null>(null);
   const [selectedWorkflow, setSelectedWorkflow] = useState<{
     id: string;
     name: string;
@@ -78,9 +60,13 @@ export function App() {
   const active = !!run && activePhases.includes(run.phase);
   const current = !!run && run.phase !== "idle" && run.id !== dismissedRun;
   const refining =
-    current && !!run && ["stopped", "waiting", "error"].includes(run.phase);
+    current &&
+    !!run &&
+    ["stopped", "waiting", "error", "done"].includes(run.phase);
   const completed = current && run?.phase === "done";
   const value = refining ? refinement : task;
+  const canContinue =
+    refining && !!run && ["stopped", "error"].includes(run.phase);
   const focusPrompt = useCallback(() => {
     requestAnimationFrame(() => promptRef.current?.focus());
   }, []);
@@ -154,55 +140,84 @@ export function App() {
       );
   }, [active]);
   useEffect(() => {
+    if (snapshot?.settings.language && snapshot?.locale)
+      setLanguage(snapshot.settings.language, snapshot.locale);
+  }, [snapshot?.settings.language, snapshot?.locale]);
+  useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
       const theme = snapshot?.settings.theme ?? "system";
       document.documentElement.dataset.theme =
         theme === "system" ? (media.matches ? "dark" : "light") : theme;
-      document.documentElement.dataset.reduceMotion = String(
-        snapshot?.settings.reduce_motion ?? false,
-      );
     };
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [snapshot?.settings.theme, snapshot?.settings.reduce_motion]);
+  }, [snapshot?.settings.theme]);
   useEffect(() => {
     if (
-      run?.phase === "stopped" ||
-      run?.phase === "waiting" ||
-      run?.phase === "error"
-    )
+      run?.phase &&
+      ["stopped", "waiting", "error", "done"].includes(run.phase)
+    ) {
       focusPrompt();
-    if (run?.phase === "done") {
-      setTask("");
-      setSelectedWorkflow(null);
-      focusPrompt();
+      document
+        .querySelector(".composer")
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
     }
-  }, [run?.phase, focusPrompt]);
+  }, [run?.phase, run?.id, focusPrompt]);
 
-  function newTask() {
-    if (active || starting || mic) return;
-    setDismissedRun(run?.id ?? -1);
+  function clearComposer() {
+    setDismissedRun(-1);
     setTask("");
     setRefinement("");
     setNotice("");
     setSavedNotice("");
     setSelectedWorkflow(null);
     setCompletedDetails(false);
+    setDeletingWorkflow(null);
     focusPrompt();
   }
-  function useWorkflow(workflow: Workflow) {
-    setDismissedRun(run?.id ?? -1);
+  async function newTask() {
+    if (active || starting || mic) return;
+    setStarting(true);
+    try {
+      await api.reset();
+      clearComposer();
+    } catch (error) {
+      setNotice(errorText(error));
+    } finally {
+      setStarting(false);
+    }
+  }
+  async function useWorkflow(workflow: Workflow) {
+    await api.reset();
+    clearComposer();
     setTask(workflow.prompt);
-    setRefinement("");
-    setNotice("");
-    setSavedNotice("");
     setSelectedWorkflow({ id: workflow.id, name: workflow.name });
     focusPrompt();
   }
+  async function deleteWorkflow(id: string) {
+    await api.deleteWorkflow(id);
+    clearComposer();
+    setSavedNotice(t("Workflow deleted. A fresh session is ready."));
+  }
+  function prepareWorkflow() {
+    if (!run) return;
+    setWorkflowSource({
+      run,
+      correction: refinement.trim(),
+      name: snapshot?.workflows.find((w) => w.id === run.workflow_id)?.name,
+    });
+  }
   async function start() {
-    if (!snapshot || starting || active || mic || !value.trim()) return;
+    if (
+      !snapshot ||
+      starting ||
+      active ||
+      mic ||
+      (!value.trim() && !canContinue)
+    )
+      return;
     if (!snapshot.settings.model || snapshot.config_error) {
       setSettingsOpen(true);
       return;
@@ -260,14 +275,14 @@ export function App() {
         </div>
         {fatal ? (
           <div role="alert">
-            <h1>Couldn't open klickwerk</h1>
+            <h1>{t("Couldn't open klickwerk")}</h1>
             <p>{fatal}</p>
-            <Button onClick={() => location.reload()}>Try again</Button>
+            <Button onClick={() => location.reload()}>{t("Try again")}</Button>
           </div>
         ) : (
           <>
             <LoaderCircle className="spin" size={20} />
-            <p>Getting ready…</p>
+            <p>{t("Getting ready…")}</p>
           </>
         )}
       </div>
@@ -280,10 +295,12 @@ export function App() {
           <div
             className="preview-banner"
             role="region"
-            aria-label="Browser preview"
+            aria-label={t("Browser preview")}
           >
             <Monitor size={12} />
-            <span>Browser preview · all desktop actions are simulated</span>
+            <span>
+              {t("Browser preview · all desktop actions are simulated")}
+            </span>
           </div>
         )}
         <header className="app-header">
@@ -294,22 +311,25 @@ export function App() {
               e.preventDefault();
               newTask();
             }}
-            aria-label="klickwerk home"
+            aria-label={t("klickwerk home")}
           >
             <span className="brand-mark">
               <Command size={22} strokeWidth={2.3} />
             </span>
             <span>
-              klickwerk<span className="brand-period">.</span>
+              {t("klickwerk")}
+              <span className="brand-period">.</span>
             </span>
           </a>
           <div className="header-actions">
-            <span className="desktop-label">A little less busywork.</span>
-            <Tooltip label="Settings">
+            <span className="desktop-label">
+              {t("A little less busywork.")}
+            </span>
+            <Tooltip label={t("Settings")}>
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Open settings"
+                aria-label={t("Open settings")}
                 disabled={active || starting || mic}
                 onClick={() => setSettingsOpen(true)}
               >
@@ -318,41 +338,41 @@ export function App() {
             </Tooltip>
           </div>
         </header>
-        <main
-          className={`main-content${current && !completed ? " has-run" : ""}`}
-        >
+        <main className={`main-content${current ? " has-run" : ""}`}>
           <section className="welcome" aria-labelledby="welcome-title">
             <div className="eyebrow">
               <Sparkles size={14} />
-              YOUR DESKTOP. A LITTLE LIGHTER.
+              {t("YOUR DESKTOP. A LITTLE LIGHTER.")}
             </div>
             <h1 id="welcome-title">
               {refining ? (
                 <>
-                  Let’s get it <span>just right.</span>
+                  <span>{t("Back to you.")}</span>
                 </>
               ) : active ? (
                 <>
-                  A little help, <span>in motion.</span>
+                  {t("A little help,")} <span>{t("in motion.")}</span>
                 </>
               ) : (
                 <>
-                  What can I take
+                  {t("What can I take")}
                   <br />
-                  <span>off your hands?</span>
+                  <span>{t("off your hands?")}</span>
                 </>
               )}
             </h1>
             <p>
               {refining
-                ? "Your next instruction makes this workflow better."
+                ? t("Review the result, refine it, or keep it for next time.")
                 : active
-                  ? "Move your mouse or press any key to take over."
-                  : "Describe the outcome. I’ll handle the clicks and typing."}
+                  ? t("Move your mouse or press any key to take over.")
+                  : t(
+                      "Describe the outcome. I’ll handle the clicks and typing.",
+                    )}
             </p>
           </section>
 
-          {current && !completed && run && (
+          {current && run && (
             <div className="task-context">
               <span>{run.task}</span>
               {!active && (
@@ -363,32 +383,63 @@ export function App() {
                   onClick={newTask}
                 >
                   <Plus size={14} />
-                  New task
+                  {t("New task")}
                 </Button>
               )}
             </div>
           )}
           <section
             className={`composer${active ? " composer-active" : ""}${refining ? " composer-refining" : ""}${mic ? " composer-listening" : ""}`}
-            aria-label={refining ? "Refine your task" : "Your task"}
+            aria-label={refining ? t("Refine your task") : t("Your task")}
           >
-            {refining && (
-              <div className="refinement-intro">
+            {refining && run && (
+              <div
+                className={`refinement-intro handoff handoff-${run.phase}`}
+                role={completed ? "status" : "alert"}
+                key={`${run.id}-${run.phase}`}
+              >
                 <span className="refinement-icon">
-                  <WandSparkles size={18} />
+                  {completed ? (
+                    <Check size={22} />
+                  ) : run.phase === "error" ? (
+                    <CircleAlert size={22} />
+                  ) : (
+                    <Pause size={22} />
+                  )}
                 </span>
                 <div>
                   <h2>
-                    {run?.phase === "waiting"
-                      ? "A quick question"
-                      : run?.interrupted
-                        ? "You took over. What should I do differently?"
-                        : "What should we change?"}
+                    {completed
+                      ? t("Done. Back to you.")
+                      : run.phase === "error"
+                        ? t("Couldn’t finish. Back to you.")
+                        : run.phase === "waiting"
+                          ? t("Your answer is needed")
+                          : run.interrupted
+                            ? t("You took over. The agent is paused.")
+                            : t("Paused. Back to you.")}
                   </h2>
-                  <p>
-                    {run?.phase === "waiting"
-                      ? run.question
-                      : "Tell me what went wrong or what you want instead. I’ll continue with your correction and the actions so far."}
+                  {!run.interrupted && (
+                    <p>
+                      {completed
+                        ? t(run.result)
+                        : run.phase === "waiting"
+                          ? t(run.question)
+                          : t(run.message)}
+                    </p>
+                  )}
+                  <p className="handoff-next">
+                    {completed
+                      ? t(
+                          "Refine the result below, save what you learned, or start a new task.",
+                        )
+                      : run.phase === "waiting"
+                        ? t(
+                            "Answer below to continue, or save this workflow for later.",
+                          )
+                        : t(
+                            "Continue as is, or add a correction below. Nothing runs until you choose.",
+                          )}
                   </p>
                 </div>
               </div>
@@ -398,7 +449,7 @@ export function App() {
                 <BookOpen size={14} />
                 <span>{selectedWorkflow.name}</span>
                 <button
-                  aria-label="Detach workflow"
+                  aria-label={t("Detach workflow")}
                   onClick={() => setSelectedWorkflow(null)}
                 >
                   <X size={13} />
@@ -412,17 +463,17 @@ export function App() {
                 </span>
                 <h2>
                   {run?.phase === "countdown"
-                    ? "Starting in a moment"
+                    ? t("Starting in a moment")
                     : run?.phase === "checking"
-                      ? "Getting ready"
-                      : "Working on your desktop"}
+                      ? t("Getting ready")
+                      : t("Working on your desktop")}
                 </h2>
-                <p>{run?.message}</p>
+                <p>{t(run?.message ?? "")}</p>
                 {run?.phase === "countdown" && (
                   <div className="countdown-track" />
                 )}
                 <span className="active-caption">
-                  Move your mouse or press any key to interrupt.
+                  {t("Move your mouse or press any key to interrupt.")}
                 </span>
               </div>
             ) : (
@@ -430,9 +481,9 @@ export function App() {
                 <label className="sr-only" htmlFor="task">
                   {refining
                     ? run?.phase === "waiting"
-                      ? "Your answer"
-                      : "Your refinement"
-                    : "What would you like me to do?"}
+                      ? t("Your answer")
+                      : t("Your refinement")
+                    : t("What would you like me to do?")}
                 </label>
                 <textarea
                   ref={promptRef}
@@ -440,8 +491,8 @@ export function App() {
                   autoFocus
                   placeholder={
                     refining
-                      ? "For example: use the search field at the top, then open the first result…"
-                      : "Describe a task, just as you’d ask a person…"
+                      ? t("What would you like to change?")
+                      : t("Describe a task, just as you’d ask a person…")
                   }
                   value={value}
                   maxLength={refining ? 4096 : 8192}
@@ -461,19 +512,21 @@ export function App() {
                 {mic && (
                   <div className="listening-label" role="status">
                     <span className="recording-dot" />
-                    Listening… Speak naturally, then stop the microphone.
+                    {t("Listening… Speak naturally, then stop the microphone.")}
                   </div>
                 )}
                 <div className="composer-toolbar">
                   <div className="composer-tools">
                     <Tooltip
-                      label={mic ? "Finish dictation" : "Dictate your task"}
+                      label={
+                        mic ? t("Finish dictation") : t("Dictate your task")
+                      }
                     >
                       <Button
                         variant="ghost"
                         size="icon"
                         aria-label={
-                          mic ? "Stop microphone" : "Dictate your task"
+                          mic ? t("Stop microphone") : t("Dictate your task")
                         }
                         aria-pressed={mic}
                         disabled={starting}
@@ -494,22 +547,28 @@ export function App() {
                         className={`status-dot${snapshot.settings.model ? " configured" : ""}`}
                       />
                       <span>
-                        {snapshot.settings.model || "Connect a model"}
+                        {snapshot.settings.model || t("Connect a model")}
                       </span>
                       <ChevronDown size={13} />
                     </button>
                   </div>
-                  <Tooltip label="Start task · Ctrl + Enter">
+                  <Tooltip label={t("Start task · Ctrl + Enter")}>
                     <Button
                       className="start-button"
-                      disabled={!value.trim() || starting || mic}
+                      disabled={
+                        (!value.trim() && !canContinue) || starting || mic
+                      }
                       onClick={() => void start()}
                     >
                       {starting ? (
                         <LoaderCircle className="spin" size={16} />
                       ) : (
                         <>
-                          {refining ? "Continue" : "Let’s do it"}
+                          {refining
+                            ? value.trim()
+                              ? t("Refine & continue")
+                              : t("Continue")
+                            : t("Let’s do it")}
                           <ArrowRight size={17} />
                         </>
                       )}
@@ -522,20 +581,20 @@ export function App() {
           <div className="composer-caption">
             <span>
               <MousePointer2 size={13} />
-              Move your mouse or type to take over. Anytime.
+              {t("Move your mouse or type to take over. Anytime.")}
             </span>
             {!active && (
               <span className="enter-hint">
-                Ctrl + Enter to {refining ? "continue" : "start"}
+                {t("Ctrl + Enter to")} {refining ? t("continue") : t("start")}
               </span>
             )}
           </div>
           {notice && (
             <div className="inline-notice" role="alert">
               <CircleHelp size={18} />
-              <span>{notice}</span>
+              <span>{t(notice)}</span>
               <button
-                aria-label="Dismiss message"
+                aria-label={t("Dismiss message")}
                 onClick={() => setNotice("")}
               >
                 <X size={16} />
@@ -549,24 +608,26 @@ export function App() {
           )}
           {snapshot.config_error && (
             <div className="inline-notice" role="alert">
-              <span>{snapshot.config_error}</span>
+              <span>{t(snapshot.config_error)}</span>
               <button
                 className="text-button"
                 onClick={() => setSettingsOpen(true)}
               >
-                Open settings
+                {t("Open settings")}
               </button>
             </div>
           )}
           {refining && run?.phase === "error" && (
             <div className="inline-notice" role="alert">
               <CircleHelp size={18} />
-              <span>{run.message}</span>
+              <span>
+                {t("Review your connection, then retry or refine the task.")}
+              </span>
               <button
                 className="text-button"
                 onClick={() => setSettingsOpen(true)}
               >
-                Check connection
+                {t("Check connection")}
               </button>
             </div>
           )}
@@ -574,69 +635,41 @@ export function App() {
             <div className="learning-row">
               <span>
                 <BookOpen size={16} />
-                Keep your refinements for next time.
+                {t("Turn this session into a better start next time.")}
               </span>
               <Button
                 variant="secondary"
                 size="sm"
                 disabled={starting || mic}
-                onClick={() =>
-                  setWorkflowSource({
-                    runId: run.id,
-                    correction: refinement.trim(),
-                  })
-                }
+                onClick={prepareWorkflow}
               >
-                Save as workflow
+                {run.workflow_id ? t("Update workflow") : t("Save as workflow")}
                 <ArrowRight size={14} />
               </Button>
             </div>
           )}
-          {completed && run && (
-            <div className="completion-strip" role="status">
-              <Check size={18} />
-              <div>
-                <strong>Done. Back to you.</strong>
-                <p>{run.result}</p>
-              </div>
-              <button
-                className="text-button"
-                onClick={() => setCompletedDetails(!completedDetails)}
-                aria-expanded={completedDetails}
-              >
-                View actions
-              </button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  setWorkflowSource({ runId: run.id, correction: "" })
-                }
-              >
-                Save workflow
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Dismiss completed task"
-                onClick={() => setDismissedRun(run.id)}
-              >
-                <X size={15} />
-              </Button>
-            </div>
+          {refining && run && run.steps.length > 0 && (
+            <button
+              className="text-button history-toggle"
+              onClick={() => setCompletedDetails(!completedDetails)}
+              aria-expanded={completedDetails}
+            >
+              {completedDetails ? t("Hide actions") : t("View actions")}
+            </button>
           )}
-          {current && run && (!completed || completedDetails) && (
+          {current && run && (active || completedDetails) && (
             <>
               <Timeline steps={run.steps} />
               {active && (
                 <div className="run-time">
-                  {formatTime(run.elapsed_ms)} elapsed
+                  {formatTime(run.elapsed_ms)}
+                  {t("elapsed")}
                 </div>
               )}
             </>
           )}
 
-          {!active && !refining && (
+          {!active && (
             <>
               {!!snapshot.workflows.length && (
                 <section
@@ -646,91 +679,136 @@ export function App() {
                   <div className="section-heading">
                     <h2 id="workflow-title">
                       <BookOpen size={16} />
-                      Your workflows
+                      {t("Your workflows")}
                     </h2>
-                    <span>Better with every refinement</span>
+                    <span>{t("Better with every refinement")}</span>
                   </div>
                   <div className="workflow-grid">
                     {snapshot.workflows.map((workflow) => (
-                      <button
-                        className="workflow-card"
-                        key={workflow.id}
-                        onClick={() =>
-                          setWorkflowSource({ workflowId: workflow.id })
-                        }
-                      >
-                        <span className="workflow-card-top">
-                          <strong>{workflow.name}</strong>
-                          <ArrowRight size={16} />
-                        </span>
-                        <p>{workflow.prompt}</p>
-                        <span className="workflow-count">
-                          {workflow.corrections
-                            ? `${workflow.corrections} ${workflow.corrections === 1 ? "refinement" : "refinements"} remembered`
-                            : "Ready to make your own"}
-                        </span>
-                      </button>
+                      <div className="workflow-card" key={workflow.id}>
+                        <button
+                          className="workflow-open"
+                          disabled={starting || mic}
+                          onClick={() =>
+                            setWorkflowSource({ workflowId: workflow.id })
+                          }
+                        >
+                          <span className="workflow-card-top">
+                            <strong>{workflow.name}</strong>
+                            <ArrowRight size={16} />
+                          </span>
+                          <p>{workflow.prompt}</p>
+                          <span className="workflow-count">
+                            {t("Saved start prompt")}
+                          </span>
+                        </button>
+                        <button
+                          className="workflow-delete"
+                          aria-label={t("Delete {name}", {
+                            name: workflow.name,
+                          })}
+                          disabled={starting || mic}
+                          onClick={() => setDeletingWorkflow(workflow.id)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        {deletingWorkflow === workflow.id && (
+                          <div className="delete-confirmation" role="alert">
+                            <p>
+                              {t(
+                                "Delete this workflow and start a fresh session?",
+                              )}
+                            </p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setDeletingWorkflow(null)}
+                            >
+                              {t("Cancel")}
+                            </Button>
+                            <Button
+                              className="button-danger"
+                              size="sm"
+                              disabled={starting || mic}
+                              onClick={() => {
+                                setStarting(true);
+                                void deleteWorkflow(workflow.id)
+                                  .catch((error) => setNotice(errorText(error)))
+                                  .finally(() => setStarting(false));
+                              }}
+                            >
+                              {t("Delete workflow")}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </section>
               )}
-              <section
-                className="suggestions"
-                aria-labelledby="suggestion-title"
-              >
-                <div className="suggestions-heading">
-                  <span id="suggestion-title">
-                    {snapshot.workflows.length
-                      ? "Or try something new"
-                      : "A few things to try"}
-                  </span>
-                </div>
-                <div className="suggestion-grid">
-                  {suggestions.map(({ icon: Icon, title, detail, prompt }) => (
-                    <button
-                      className="suggestion"
-                      key={title}
-                      onClick={() => {
-                        setTask(prompt);
-                        setSelectedWorkflow(null);
-                        setDismissedRun(run?.id ?? -1);
-                        focusPrompt();
-                      }}
-                    >
-                      <span className="suggestion-icon">
-                        <Icon size={19} strokeWidth={1.7} />
-                      </span>
-                      <strong>
-                        {title}
-                        <ArrowRight size={14} />
-                      </strong>
-                      <span>{detail}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-              {!snapshot.workflows.length && (
+              {!current && (
+                <section
+                  className="suggestions"
+                  aria-labelledby="suggestion-title"
+                >
+                  <div className="suggestions-heading">
+                    <span id="suggestion-title">
+                      {snapshot.workflows.length
+                        ? t("Or try something new")
+                        : t("A few things to try")}
+                    </span>
+                  </div>
+                  <div className="suggestion-grid">
+                    {suggestions.map(
+                      ({ icon: Icon, title, detail, prompt }) => (
+                        <button
+                          className="suggestion"
+                          key={title}
+                          onClick={() => {
+                            setTask(prompt);
+                            setSelectedWorkflow(null);
+                            setDismissedRun(run?.id ?? -1);
+                            focusPrompt();
+                          }}
+                        >
+                          <span className="suggestion-icon">
+                            <Icon size={19} strokeWidth={1.7} />
+                          </span>
+                          <strong>
+                            {title}
+                            <ArrowRight size={14} />
+                          </strong>
+                          <span>{detail}</span>
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </section>
+              )}
+              {!current && !snapshot.workflows.length && (
                 <p className="workflow-empty">
-                  <BookOpen size={14} />A task worth repeating? Refine it as you
-                  go, then save it here.
+                  <BookOpen size={14} />
+                  {t(
+                    "A task worth repeating? Refine it as you go, then save it here.",
+                  )}
                 </p>
               )}
             </>
           )}
           {snapshot.workflow_error && (
             <div className="inline-notice" role="alert">
-              <span>{snapshot.workflow_error}</span>
+              <span>{t(snapshot.workflow_error)}</span>
             </div>
           )}
         </main>
         <footer className="app-footer">
           <span className="footer-note">
             <span className="status-dot configured" />
-            Your pace. Your control.
+            {t("Your pace. Your control.")}
           </span>
           <span className="footer-signature">
             <Sparkles size={13} />
-            Less clicking. More living.
+            {t("Less clicking. More living.")}
           </span>
         </footer>
         <SettingsDialog
@@ -751,9 +829,24 @@ export function App() {
               focusPrompt();
             }}
             onUse={useWorkflow}
-            onSaved={(workflow) =>
-              setSavedNotice(`“${workflow.name}” is saved in Your workflows.`)
-            }
+            onDelete={deleteWorkflow}
+            onSaved={(workflow, learned) => {
+              setSelectedWorkflow((current) =>
+                current?.id === workflow.id
+                  ? { id: workflow.id, name: workflow.name }
+                  : current,
+              );
+              if (selectedWorkflow?.id === workflow.id && !current)
+                setTask(workflow.prompt);
+              setSavedNotice(
+                t(
+                  learned
+                    ? "“{name}” learned from this session. The improved start prompt is saved."
+                    : "“{name}” is saved with your corrections. Learning was unavailable.",
+                  { name: workflow.name },
+                ),
+              );
+            }}
           />
         )}
       </div>

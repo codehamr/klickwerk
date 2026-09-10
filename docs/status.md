@@ -1,60 +1,62 @@
 # Validation status — 2026-09-10
 
-The interface now uses one server connection flow, physical input takeover,
-continuous correction history, and reusable workflows with editable start prompts
-and model-generated memory. Browser development uses an isolated simulation.
+The interface now returns control explicitly after takeover, questions, success and
+failure. Workflows consolidate temporary session evidence into one saved start
+prompt. English/German UI detection and override, bilingual suggestions, paced text,
+visual settling and stale text-input checks are implemented.
 
 ## Completed validation
 
 | Check | Evidence |
 | --- | --- |
-| Windows x64 release | `build/klickwerk.exe`, 6,033,408 bytes; current React assets embedded with `tauri/custom-protocol` |
+| Windows x64 release | `build/klickwerk.exe`, 6,035,968 bytes, current frontend embedded with `tauri/custom-protocol` |
 | Frontend checks | TypeScript and ESLint pass |
-| Browser behavior and accessibility | 16 Chromium/Playwright tests pass; the three workflow tests also pass after the final correction-retention change |
-| Portable Rust tests | 20 pass on Linux |
-| Windows release tests | 21 pass under Wine, including DPAPI persistence and verification of embedded HTML/JS/CSS without a development server |
-| Windows static checks | Windows-target Clippy, including native fixtures and test targets, passes with warnings denied |
-| Native input monitoring | 13 checks pass on an isolated Wine/Xvfb desktop |
-| Native input integration | 8 checks pass with a fixture-owned unsaved editor and loopback scripted provider |
-| Visual review | Light/dark home, settings, narrow layout, and correction view; screenshots in `build/visual/` |
+| Browser behavior and accessibility | 19 Chromium/Playwright tests pass, including axe checks |
+| Portable Rust tests | 24 pass on Linux |
+| Windows static checks | Windows-target Clippy for all targets and native fixtures passes with warnings denied |
+| Native input monitoring | 13 checks pass under Wine/Xvfb |
+| Native input integration | 10 checks pass with a fixture-owned unsaved editor and scripted loopback provider |
+| Visual review | English light/dark/narrow screens and German home, settings, handoff and workflow dialog; `build/visual/` |
 
-Native checks cover invisible monitoring, countdown cancellation, premature input
-refusal, heartbeat/pipe loss, and distinguishing tagged agent events from external
-mouse/keyboard input without a reserved shortcut. Keyboard and mouse takeover
-measured 14 ms and 1 ms in one isolated run. These are fixture observations, not
-physical Windows hardware benchmarks or guaranteed worst-case limits.
+Browser tests cover URL/key/model order, focus, takeover, unchanged continuation,
+refinement after success, questions and failures, finalization for all outcomes,
+unsent corrections, updates, deletion of selected/current workflows, cancellation,
+failed-learning fallback and stale draft refusal after reset or deletion. German
+locale detection, manual override and persistence preserve user-authored text.
 
-Input integration sends a real screenshot to a scripted local provider, executes
-the returned click, types Unicode and surrogate pairs, replaces text using Ctrl+A,
-checks multiline input and released modifiers, and interrupts ongoing typing.
-It exposed and verified a fix for untagged duplicate mouse-position notifications
-that previously caused the agent to interrupt itself.
+Rust tests cover workflow migration and atomic persistence without raw history,
+correction retention, a whole-session finalization overview, explicit-instruction
+fallback, and bounded visual settling that tolerates caret changes while detecting
+local text changes. Provider fixtures verify actual input, corrections, outcome and
+edited task context without a screenshot in the finalization request.
 
-Workflow checks cover full text/coordinate context, preserved corrections when
-action history is truncated for model requests, model-generated instructions,
-atomic save/reload, editable prompts, cancellation, deletion, and retention of a
-saved correction when the user later refines it again. Both old and new corrections
-stay in one workflow. Stored model credentials are never used by test fixtures.
+Native fixtures verify invisible input monitoring, tagged versus external input,
+countdown cancellation, heartbeat/pipe loss and takeover. The integration fixture
+sends a real screenshot to a scripted provider, clicks its disposable editor,
+types Unicode and multiline text, checks released modifiers and interrupts long
+typing. It also verifies that changed content rejects stale typing while unchanged
+content with the same focused field is accepted. No personal model credentials or
+user documents were used.
 
-A Windows bind-mount lock prevented Vite from removing the existing `dist/assets`
-directory. The current frontend was built in `/tmp/klickwerk-refinement-ui`, then
-copied into `dist` with only its current generated assets. Browser test artifacts
-were likewise redirected to `/tmp`; the repository's existing locked directories
-were left in place. This does not affect the embedded production interface.
-The executable's SHA-256 and size are recorded in
-`build/validation/refinement-release.json`.
+A bind-mount lock prevented Playwright from removing `test-results` during the final
+run; `PLAYWRIGHT_OUTPUT_DIR=/tmp/klickwerk-ui-tests` was used instead. The normal
+production build completed successfully. The executable hash and validation counts
+are recorded in `build/validation/session-flow-release.json`.
+
+SHA-256: `7c0077ad654677004a08a27f5714869fcb41057c87947a0432ee5ff0419aad80`
 
 ## Target-PC checks still required
 
-- Windows 11/WebView2 launch and minimized-window heartbeat behavior.
-- Physical keyboard/mouse takeover under load and during held input; secure
-  desktop, display/session transitions, and full-screen applications.
-- Mixed-DPI and negative-origin monitor layouts on actual hardware.
-- Real-model accuracy, coordinate interpretation, inference latency, completion
-  judgment, and the usefulness of generated workflow instructions.
-- SAPI microphone permissions, installed languages, recognition quality, and
-  actual audio device behavior.
+- Real Windows 11/WebView2 launch, minimized-window heartbeats and foreground focus
+  after each handoff, including full-screen applications and Windows focus denial.
+- Physical mouse/keyboard takeover under load and during held input; secure desktop,
+  display/session transitions, mixed DPI and negative monitor origins.
+- Real-model accuracy, task completion judgment and the quality of consolidated
+  workflow prompts. Scripted tests do not establish these results.
+- Slow application rendering, persistent animations and delayed input on target
+  applications. A quiet screen cannot prove all background work has completed.
+- SAPI microphone permissions, installed languages, recognition and audio devices.
 
-The GitHub Actions workflow has not been submitted or executed in this session.
-Follow [Windows acceptance](windows-acceptance.md). A successful compile, scripted
-provider, browser simulation, or Wine run does not establish those target-PC results.
+The GitHub Actions workflow was not run in this session. Follow
+[Windows acceptance](windows-acceptance.md). Wine and browser checks do not establish
+physical Windows hardware or WebView2 acceptance.

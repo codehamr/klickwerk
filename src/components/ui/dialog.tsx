@@ -1,3 +1,4 @@
+import { useI18n } from "../../lib/i18n";
 import * as Primitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
@@ -21,6 +22,7 @@ export function DialogContent({
   onCloseAutoFocus?: (event: Event) => void;
   closeLabel?: string;
 }) {
+  const { t } = useI18n();
   return (
     <Primitive.Portal>
       <Primitive.Overlay className="dialog-overlay" />
@@ -35,7 +37,7 @@ export function DialogContent({
           </div>
           <Primitive.Close
             className="button button-ghost button-icon"
-            aria-label={closeLabel}
+            aria-label={t(closeLabel)}
           >
             <X size={19} />
           </Primitive.Close>

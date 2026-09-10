@@ -10,7 +10,8 @@ do not establish physical hardware or WebView2 acceptance.
   `dist` directory. Its interface must open from embedded assets.
 - Confirm `config.cfg` is created beside the EXE, regardless of working directory.
 - Enter a bare local address, an HTTPS URL, and a proxy API path in the same field.
-  Load models, test the connection, save, and verify settings survive restart.
+  Enter the API key before loading models. Test the connection and verify settings
+  survive restart. Check automatic German/English detection and manual override.
 - Verify existing configurations with legacy `provider` values still load and
   that saving removes that unused field. API keys use DPAPI and do not appear in
   public snapshots; changing server origin clears the old key.
@@ -23,7 +24,9 @@ do not establish physical hardware or WebView2 acceptance.
   two seconds and the main window minimizes before capture. No stop bar appears.
 - Move the physical mouse during countdown, model inference, clicking, dragging,
   and long typing. Repeat with ordinary keys, buttons, and scrolling. Control must
-  end without automatic resumption, and held keys/buttons must be released.
+  end without automatic resumption, and held keys/buttons must be released. The
+  main window should restore and focus, with an obvious paused state and a focused
+  refinement field. Check Continue without a correction and Refine & continue.
 - Verify the agent's own clicks, Unicode text, and shortcuts do not interrupt it.
 - Test parent termination, UI hangs, minimized-window heartbeats, WebView failure,
   monitor changes, lock/unlock, and suspend/resume. No late action may arrive after
@@ -52,17 +55,35 @@ physical hardware still needs the manual checks above.
    the old actions and correction remain visible and reach the next model request.
    Ensure partial actions are not presented as verified success.
 4. Trigger a question, answer it, and verify the new countdown retains context.
-5. After stopping, type a correction and choose Save as workflow without first
-   continuing. Verify the model includes that unsent correction in its proposed
-   start prompt and memory. Cancel preparation and test server failure/retry.
-6. Edit the name, prompt, and internal instructions, then save. Restart the app,
-   reopen the workflow, inspect its history, and edit/save the prompt again.
-7. Use that workflow in a fresh instance with windows in different positions.
-   Verify learned target descriptions are adapted to the new screenshot. Refine
-   and save again; old and new corrections must remain in the same workflow.
-8. Begin another task. No card from the previously completed task should remain.
-9. Verify read-only folders and damaged workflow/config files produce useful
-   errors without overwriting existing data. Delete a saved test workflow and
-   confirm it stays removed after restart.
+5. Save after success, failure, an unanswered question and takeover, both with and
+   without an unsent correction. Each save must show learning and consolidate the
+   available evidence into a single prompt. Cancel preparation and test failure,
+   retry and the explicit unlearned fallback save.
+6. Edit the name and start prompt, then save. Restart and verify no raw action
+   history or separate memory is stored in the workflow. Edit/save the prompt again;
+   another finalization must run. Check migration from a version 1 library.
+7. Use a workflow with windows in different positions. Verify target descriptions
+   adapt to the new screenshot. Refine and save again; useful old and new knowledge
+   should be consolidated into the same workflow. Do not infer learning quality
+   from scripted provider tests.
+8. Completion and failure must restore/focus the app with distinct feedback and
+   offer refinement, workflow saving/updating and New task. Test minimized,
+   maximized and full-screen target applications; record any Windows focus denial.
+9. Check read-only folders and damaged workflow/config files without overwriting
+   existing data. Delete from the card and dialog, including a selected workflow
+   and a workflow attached to a completed or paused run. The prompt and session
+   must clear, and a late finalization result must not recreate the deleted item.
 10. Test SAPI dictation for both tasks and refinements, including permission denial,
     cancellation, device removal, and the configured Windows speech language.
+
+## Slow application rendering
+
+- Test an editor and browser with delayed rendering after click, typing, Enter and
+  navigation. Observations should wait for visual quiet and be bounded to five
+  seconds; moving the mouse or pressing a key must interrupt the wait immediately.
+- Change content or keyboard focus during a slow model response. Stale typing
+  must be skipped and re-observed. Confirm ordinary caret blinking does not stall
+  the controller, and test persistent animation/spinner behavior.
+- Have a scripted provider repeat text or a click without any visible change.
+  The app must ask the user before duplicating the last input. This is conservative
+  detection, not proof that an arbitrary application has finished all background work.

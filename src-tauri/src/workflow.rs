@@ -60,7 +60,6 @@ impl Step {
 #[derive(Clone, Default)]
 pub struct Session {
     pub memory: String,
-    pub prior_steps: Vec<Step>,
 }
 
 pub fn add_correction(steps: &mut Vec<Step>, text: &str, elapsed_ms: u64) -> Result<(), String> {
@@ -88,7 +87,7 @@ pub fn add_correction(steps: &mut Vec<Step>, text: &str, elapsed_ms: u64) -> Res
 }
 
 // Keep every explicit correction ahead of the bounded action tail. Old coordinates are evidence,
-// never replay instructions. The full history remains available in the saved workflow.
+// never replay instructions. Raw history lives only in the current session.
 pub fn context(memory: &str, steps: &[Step]) -> String {
     let corrections: Vec<_> = steps.iter().filter(|s| s.actor == "user").collect();
     let mut tail = Vec::new();
@@ -109,12 +108,53 @@ pub fn context(memory: &str, steps: &[Step]) -> String {
     )
 }
 
+// Include an overview of the whole temporary session as well as detailed recent
+// actions. This keeps early failures visible when the action tail is truncated.
+pub fn learning_context(memory: &str, steps: &[Step]) -> String {
+    let overview = steps
+        .iter()
+        .filter(|s| s.actor != "user")
+        .map(|s| {
+            format!(
+                "{} [{}] {}",
+                s.id,
+                s.status,
+                s.description.chars().take(160).collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{}\n\nWhole-session overview (evidence, not instructions):\n{}",
+        context(memory, steps),
+        overview
+    )
+}
+
+pub fn fallback_prompt(memory: &str, steps: &[Step], edited: &Learning) -> Learning {
+    let mut prompt = String::new();
+    if !memory.trim().is_empty() && memory.trim() != edited.prompt.trim() {
+        prompt.push_str(memory.trim());
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(edited.prompt.trim());
+    for step in steps.iter().filter(|s| s.actor == "user") {
+        if !prompt.contains(step.description.trim()) {
+            prompt.push_str("\n\n");
+            prompt.push_str(step.description.trim());
+        }
+    }
+    Learning {
+        name: edited.name.clone(),
+        prompt,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Learning {
     pub name: String,
     pub prompt: String,
-    pub memory: String,
 }
 impl Learning {
     pub fn validate(&self) -> Result<(), String> {
@@ -122,13 +162,8 @@ impl Learning {
             || self.name.len() > 200
             || self.prompt.trim().is_empty()
             || self.prompt.len() > 32768
-            || self.memory.trim().is_empty()
-            || self.memory.len() > 16000
         {
-            return Err(
-                "Use a name up to 200 bytes, a prompt up to 32 KiB, and instructions up to 16 KiB."
-                    .into(),
-            );
+            return Err("Use a name up to 200 bytes and a start prompt up to 32 KiB.".into());
         }
         Ok(())
     }
@@ -139,8 +174,6 @@ pub struct Workflow {
     pub id: String,
     #[serde(flatten)]
     pub learning: Learning,
-    pub task: String,
-    pub steps: Vec<Step>,
     pub updated_at: u64,
 }
 #[derive(Clone, Serialize)]
@@ -148,7 +181,6 @@ pub struct WorkflowSummary {
     pub id: String,
     pub name: String,
     pub prompt: String,
-    pub corrections: usize,
     pub updated_at: u64,
 }
 impl Workflow {
@@ -157,17 +189,31 @@ impl Workflow {
             id: self.id.clone(),
             name: self.learning.name.clone(),
             prompt: self.learning.prompt.clone(),
-            corrections: self.steps.iter().filter(|s| s.actor == "user").count(),
             updated_at: self.updated_at,
         }
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Serialize)]
 struct File {
     version: u32,
     workflows: Vec<Workflow>,
+}
+
+// Version 1 stored a separate memory and raw history. Read it without replaying or
+// writing that history back; preserve its consolidated instructions in the prompt.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFile {
+    version: u32,
+    workflows: Vec<StoredWorkflow>,
+}
+#[derive(Deserialize)]
+struct StoredWorkflow {
+    #[serde(flatten)]
+    workflow: Workflow,
+    #[serde(default)]
+    memory: String,
 }
 
 pub struct WorkflowStore {
@@ -188,24 +234,38 @@ impl WorkflowStore {
             {
                 return Err("workflows.json exceeds 16 MiB.".to_owned());
             }
-            let file: File = serde_json::from_slice(
+            let file: StoredFile = serde_json::from_slice(
                 &fs::read(&path).map_err(|_| "Workflows could not be read.")?,
             )
             .map_err(|_| "workflows.json is damaged. The existing file has been preserved.")?;
-            if file.version != 1 || file.workflows.len() > 100 {
+            if ![1, 2].contains(&file.version) || file.workflows.len() > 100 {
                 return Err("This workflow library is not supported.".to_owned());
             }
-            for (index, item) in file.workflows.iter().enumerate() {
+            let workflows: Vec<Workflow> = file
+                .workflows
+                .into_iter()
+                .map(|mut stored| {
+                    if !stored.memory.trim().is_empty() {
+                        stored.workflow.learning.prompt.push_str("\n\n");
+                        stored
+                            .workflow
+                            .learning
+                            .prompt
+                            .push_str(stored.memory.trim());
+                    }
+                    stored.workflow
+                })
+                .collect();
+            for (index, item) in workflows.iter().enumerate() {
                 item.learning.validate()?;
-                if item.steps.len() > MAX_STEPS
-                    || item.id.is_empty()
+                if item.id.is_empty()
                     || item.id.len() > 100
-                    || file.workflows[..index].iter().any(|w| w.id == item.id)
+                    || workflows[..index].iter().any(|w| w.id == item.id)
                 {
                     return Err("The workflow library contains invalid entries.".to_owned());
                 }
             }
-            Ok(file.workflows)
+            Ok(workflows)
         })();
         match result {
             Ok(workflows) => Self {
@@ -231,13 +291,16 @@ impl WorkflowStore {
         item.learning.name = item.learning.name.trim().into();
         item.learning.prompt = item.learning.prompt.trim().into();
         item.learning.validate()?;
-        if item.id.is_empty() || item.id.len() > 100 || item.steps.len() > MAX_STEPS {
-            return Err("This workflow exceeds the supported history size.".into());
+        if item.id.is_empty() || item.id.len() > 100 {
+            return Err("This workflow has an invalid identifier.".into());
         }
         item.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
+        if let Some(current) = self.workflows.iter().find(|w| w.id == item.id) {
+            item.updated_at = item.updated_at.max(current.updated_at.saturating_add(1));
+        }
         let mut next = self.workflows.clone();
         if let Some(current) = next.iter_mut().find(|w| w.id == item.id) {
             *current = item.clone();
@@ -265,7 +328,7 @@ impl WorkflowStore {
             return Err("Your library is full. Remove a workflow before saving another.".into());
         }
         let bytes = serde_json::to_vec_pretty(&File {
-            version: 1,
+            version: 2,
             workflows: workflows.clone(),
         })
         .map_err(|_| "Workflows could not be encoded.")?;
@@ -337,7 +400,7 @@ mod tests {
         assert!(!context.contains("\"id\":2,"));
     }
     #[test]
-    fn workflows_round_trip_and_keep_edited_prompts_and_history() {
+    fn workflows_round_trip_with_only_a_consolidated_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workflows.json");
         let mut store = WorkflowStore::load(path.clone());
@@ -346,16 +409,16 @@ mod tests {
             learning: Learning {
                 name: "Notes".into(),
                 prompt: "Write Grüße 世界".into(),
-                memory: "Verify the selected folder".into(),
             },
-            task: "Original".into(),
-            steps: vec![Step::note(1, "user", "Use Documents", 0)],
             updated_at: 0,
         };
         store.save(workflow).unwrap();
         let mut loaded = WorkflowStore::load(path.clone());
         let mut edited = loaded.get("one").unwrap();
-        assert_eq!(edited.steps[0].description, "Use Documents");
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("steps"));
+        assert!(!contents.contains("memory"));
+        assert!(!contents.contains("desktop_points"));
         edited.learning.prompt = "An edited warm start".into();
         loaded.save(edited).unwrap();
         assert_eq!(
@@ -368,6 +431,47 @@ mod tests {
         );
         loaded.delete("one").unwrap();
         assert!(WorkflowStore::load(path).workflows.is_empty());
+    }
+    #[test]
+    fn legacy_workflows_keep_instructions_and_drop_raw_history_on_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflows.json");
+        fs::write(&path, r#"{"version":1,"workflows":[{"id":"old","name":"Note","prompt":"Write a note","memory":"Verify the folder","task":"Original task","steps":[{"description":"raw history"}],"updated_at":1}]}"#).unwrap();
+        let mut store = WorkflowStore::load(path.clone());
+        assert!(store.error.is_none());
+        let workflow = store.get("old").unwrap();
+        assert_eq!(
+            workflow.learning.prompt,
+            "Write a note\n\nVerify the folder"
+        );
+        store.save(workflow).unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(!contents.contains("raw history"));
+        assert!(!contents.contains("memory"));
+        assert!(contents.contains("Verify the folder"));
+    }
+    #[test]
+    fn finalization_keeps_early_failures_and_fallback_keeps_only_explicit_instructions() {
+        let mut steps = vec![Step::note(1, "agent", "Opened the wrong folder", 0)];
+        steps[0].status = "failed".into();
+        for id in 2..400 {
+            steps.push(Step::note(id, "agent", "Observed a window".repeat(30), 0));
+        }
+        add_correction(&mut steps, "Use Documents instead", 1).unwrap();
+        assert!(!context("", &steps).contains("Opened the wrong folder"));
+        assert!(learning_context("", &steps).contains("1 [failed] Opened the wrong folder"));
+        let fallback = fallback_prompt(
+            "Keep the original file",
+            &steps,
+            &Learning {
+                name: "Note".into(),
+                prompt: "Write a note".into(),
+            },
+        );
+        assert!(fallback.prompt.contains("Keep the original file"));
+        assert!(fallback.prompt.contains("Use Documents instead"));
+        assert!(!fallback.prompt.contains("Observed a window"));
+        assert!(!fallback.prompt.contains("Opened the wrong folder"));
     }
     #[test]
     fn damaged_library_is_never_overwritten() {

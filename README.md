@@ -15,24 +15,34 @@ tools; users do not install them.
 1. Put `build/klickwerk.exe` in a writable folder and open it.
 2. The app creates `config.cfg` **beside that EXE** on first launch and reads it on
    subsequent launches. Settings saves changes back to that exact file.
-3. Open **Settings**, enter a **Server URL**, and select a vision model. The same
+3. Open **Settings**, enter a **Server URL**, add an optional **API key**, then select a vision model. The same
    connection works for every compatible server. Addresses such as
    `localhost:11434` work directly; standard API paths are completed automatically.
-   Leaving the URL field loads available models. Manual model IDs also work.
+   Focusing the model field loads models with the current key. Manual model IDs also work.
 4. **Test connection** checks image understanding using a generated shape image.
    Save settings when ready.
 5. Enter a task and click **Let’s do it** or press **Ctrl + Enter**. A short notice
    explains that control starts in two seconds. The window then minimizes.
-6. Move your mouse or press any key to interrupt from any application. The agent
-   releases control and the app offers **Your refinement** in the prompt area.
-   Describe what to change and press **Continue**. The task, actual input history,
-   and your corrections stay together across attempts.
-7. After taking over or finishing, choose **Save as workflow** / **Save workflow**.
-   The selected model reviews the actions and corrections, then prepares a name,
-   start prompt, and internal instructions. Review or edit them and save.
-8. Open a saved workflow from **Your workflows**. Its start prompt, memory, and
-   included history are editable or inspectable. **Use workflow** fills the prompt;
-   starting it creates a fresh run with the learned instructions.
+6. Move your mouse or press any key to interrupt from any application. Input stops,
+   the window is restored and requests focus, and a clear paused message returns
+   control to you. Choose **Continue** as is, or enter a correction and choose
+   **Refine & continue**. Success, questions, and failures also return control;
+   successful tasks remain available for refinement until you choose **New task**.
+7. Choose **Save as workflow** or **Update workflow** at any handoff, including a
+   failed run. Edit the name or intended start prompt and choose **Learn & save**.
+   The model finalizes one reusable prompt from the session's actions, outcome,
+   prior knowledge and corrections, including any unsent refinement. A visible
+   learning state and save confirmation show when the new instructions are stored.
+   If learning fails, retry or explicitly **Save current prompt** with your
+   corrections; the app does not claim that consolidation succeeded.
+8. Open a saved workflow from **Your workflows**. **Use workflow** loads its single
+   start prompt into a fresh session. Saving edits also runs finalization. Delete
+   directly from its card or dialog; a visible confirmation clears the workflow,
+   main prompt and temporary session together.
+9. The UI and suggestions automatically use German on a German Windows display
+   language, otherwise English. **Settings → Preferences → Language** lets you
+   select **Automatic**, **Deutsch** or **English**. Your own text is never translated
+   when you change the UI language.
 
 The Windows WebView2 Runtime is required and normally ships with Windows 11. The
 EXE is not an installer and does not silently download a runtime. Move the app out
@@ -40,7 +50,7 @@ of `Program Files` or another read-only folder if settings cannot be saved.
 
 The microphone uses the Windows default SAPI recognizer and default audio input.
 An installed speech language and microphone permission are required. Typed prompts
-remain available. Prompts and dictation can be multilingual; the interface is English.
+remain available. Prompts and dictation can be multilingual; the interface supports English and German.
 
 ## Settings next to the EXE
 
@@ -60,10 +70,19 @@ the **selected model server** while a task runs. Preparing a workflow sends its
 text history to that same server without capturing a screenshot. Learning means
 reusing saved instructions and corrections; it does not retrain the model.
 
-Unfinished task history stays in memory. Only workflows you explicitly save are
-written to `workflows.json` beside the EXE, including agent-entered text, click
-coordinates, and your corrections. This file is readable JSON. Screenshots and
-audio are never saved. Old completed tasks do not appear as a separate task list.
+Action history stays in memory for the current session, including after a save so
+that you can continue refining. Only the consolidated prompt, name, ID and update
+time are written to `workflows.json` beside the EXE. Old workflow memory is merged
+into its prompt on load; the next library write removes legacy raw history.
+Screenshots and audio are never saved. **New task** and workflow deletion discard
+the temporary session. There is no persistent list of previous tasks.
+
+Before each model observation, the controller waits at least 700 ms and requires
+450 ms of visual quiet, with a five-second limit. Small caret changes are ignored.
+Text is paced; after model inference, screen content and the focused text field
+are checked again before typing. A repeated click, key or text action with no
+visible change returns a question instead of silently sending duplicate input.
+All waiting remains interruptible.
 
 ## Develop
 

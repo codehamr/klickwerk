@@ -1,3 +1,4 @@
+import { t, useI18n } from "../lib/i18n";
 import { useState } from "react";
 import {
   Check,
@@ -14,15 +15,15 @@ import { formatTime } from "../lib/utils";
 function describe(action: Action): string {
   switch (action.type) {
     case "click":
-      return `${action.button === "right" ? "Right click" : "Click"} at (${action.x}, ${action.y})`;
+      return `${t(action.button === "right" ? "Right click" : "Click")} (${action.x}, ${action.y})`;
     case "double_click":
-      return `Double click at (${action.x}, ${action.y})`;
+      return `${t("Double click")} (${action.x}, ${action.y})`;
     case "move":
-      return `Move to (${action.x}, ${action.y})`;
+      return `${t("Move")} (${action.x}, ${action.y})`;
     case "drag":
-      return `Drag (${action.x}, ${action.y}) → (${action.x2}, ${action.y2})`;
+      return `${t("Drag")} (${action.x}, ${action.y}) → (${action.x2}, ${action.y2})`;
     case "scroll":
-      return `Scroll ${action.amount > 0 ? "up" : "down"} ${Math.abs(action.amount)} at (${action.x}, ${action.y})`;
+      return `${t(action.amount > 0 ? "Scroll up" : "Scroll down")} ${Math.abs(action.amount)} (${action.x}, ${action.y})`;
     case "key":
       return [...action.modifiers, action.key]
         .map((k) =>
@@ -32,11 +33,11 @@ function describe(action: Action): string {
         )
         .join(" + ");
     case "text":
-      return "Type text";
+      return t("Type text");
     case "wait":
-      return `Wait ${action.duration_ms} ms`;
+      return `${t("Wait")} ${action.duration_ms} ms`;
     case "observe":
-      return "Check the screen";
+      return t("Check the screen");
     case "ask_user":
       return action.question;
     case "finish":
@@ -44,15 +45,16 @@ function describe(action: Action): string {
   }
 }
 export function Timeline({ steps }: { steps: Step[] }) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? steps : steps.slice(-4);
   if (!steps.length) return null;
   return (
-    <section className="timeline" aria-label="Action history">
+    <section className="timeline" aria-label={t("Action history")}>
       <div className="section-heading">
-        <h3>What happened</h3>
+        <h3>{t("What happened")}</h3>
         <span>
-          {steps.length} {steps.length === 1 ? "entry" : "entries"}
+          {steps.length} {steps.length === 1 ? t("entry") : t("entries")}
         </span>
       </div>
       {steps.length > 4 && (
@@ -62,8 +64,8 @@ export function Timeline({ steps }: { steps: Step[] }) {
           onClick={() => setExpanded(!expanded)}
         >
           {expanded
-            ? "Show recent actions"
-            : `Show all ${steps.length} entries`}
+            ? t("Show recent actions")
+            : t("Show all {count} entries", { count: steps.length })}
           <ChevronDown size={13} className={expanded ? "rotated" : ""} />
         </button>
       )}
@@ -89,22 +91,23 @@ export function Timeline({ steps }: { steps: Step[] }) {
                 <div className="timeline-meta">
                   <span>
                     {step.actor === "user"
-                      ? "Your refinement"
+                      ? t("Your refinement")
                       : step.actor === "system"
-                        ? "Session"
-                        : "Agent"}
+                        ? t("Session")
+                        : t("Agent")}
                   </span>
                   <time>{formatTime(step.elapsed_ms)}</time>
                   {step.actor === "agent" && (
                     <span className={`action-status status-${step.status}`}>
                       {step.status === "completed" ? (
                         <>
-                          <Check size={11} /> Sent
+                          <Check size={11} />
+                          {t("Sent")}
                         </>
                       ) : step.status === "pending" ? (
-                        "In progress"
+                        t("In progress")
                       ) : (
-                        step.status
+                        t(step.status)
                       )}
                     </span>
                   )}
@@ -116,13 +119,13 @@ export function Timeline({ steps }: { steps: Step[] }) {
                     {action.type === "text" && <pre>{action.text}</pre>}
                     {step.image_size && (
                       <p>
-                        Screenshot: {step.image_size[0]} × {step.image_size[1]}{" "}
-                        px
+                        {t("Screenshot:")}
+                        {step.image_size[0]} × {step.image_size[1]} {t("px")}
                       </p>
                     )}
                     {!!step.desktop_points.length && (
                       <p>
-                        Desktop:{" "}
+                        {t("Desktop:")}{" "}
                         {step.desktop_points
                           .map((p) => `(${p[0]}, ${p[1]})`)
                           .join(" → ")}
@@ -130,12 +133,14 @@ export function Timeline({ steps }: { steps: Step[] }) {
                     )}
                     <p>
                       {step.status === "completed"
-                        ? "Input sent. The next screen check verifies the outcome."
+                        ? t(
+                            "Input sent. The next screen check verifies the outcome.",
+                          )
                         : step.status === "interrupted"
-                          ? "This action may have been only partly sent."
+                          ? t("This action may have been only partly sent.")
                           : step.status === "skipped"
-                            ? "No input sent. The target changed."
-                            : "Recorded in the agent’s context."}
+                            ? t("No input sent. The target changed.")
+                            : t("Recorded in the agent’s context.")}
                     </p>
                   </details>
                 )}

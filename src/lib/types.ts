@@ -7,7 +7,7 @@ export interface Settings {
   request_timeout_seconds: number;
   max_steps: number;
   theme: "system" | "light" | "dark";
-  reduce_motion: boolean;
+  language: "system" | "en" | "de";
 }
 
 export type Phase =
@@ -51,23 +51,20 @@ export interface Step {
 export interface Learning {
   name: string;
   prompt: string;
-  memory: string;
 }
 export interface Workflow extends Learning {
   id: string;
-  task: string;
-  steps: Step[];
   updated_at: number;
 }
 export interface WorkflowSummary {
   id: string;
   name: string;
   prompt: string;
-  corrections: number;
   updated_at: number;
 }
 export interface WorkflowDraft {
   token: string;
+  warning?: string | null;
   workflow: Workflow;
 }
 export interface Run {
@@ -89,6 +86,7 @@ export interface Snapshot {
   config_error: string | null;
   run: Run;
   platform: "windows" | "preview";
+  locale: "en" | "de";
   workflows: WorkflowSummary[];
   workflow_error: string | null;
 }
@@ -124,5 +122,5 @@ export const defaultSettings: Settings = {
   request_timeout_seconds: 120,
   max_steps: 50,
   theme: "system",
-  reduce_motion: false,
+  language: "system",
 };

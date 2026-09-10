@@ -318,6 +318,7 @@ pub struct Plan {
     pub batches: VecDeque<Batch>,
     pub frame: Frame,
     pub focus: Option<usize>,
+    pub focused_control: Option<usize>,
     pub parent: u32,
 }
 impl Plan {
@@ -440,7 +441,8 @@ impl Plan {
                     }
                     batches.push_back(Batch {
                         events,
-                        delay_ms: 0,
+                        // Pace Unicode scalars so a slow editor can drain its input queue.
+                        delay_ms: 8,
                         point: None,
                     });
                 }
@@ -476,6 +478,7 @@ impl Plan {
         Ok(Self {
             batches,
             frame,
+            focused_control: focus.map(|_| super::capture::focused_control()),
             focus,
             parent,
         })
@@ -494,7 +497,10 @@ impl Plan {
         }
         if let Some(focus) = self.focus {
             let current = unsafe { GetForegroundWindow() };
-            if current as usize != focus || !allowed_window(current, self.parent) {
+            if current as usize != focus
+                || !allowed_window(current, self.parent)
+                || self.focused_control != Some(super::capture::focused_control())
+            {
                 return false;
             }
         }

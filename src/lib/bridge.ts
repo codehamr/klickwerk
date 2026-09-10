@@ -54,18 +54,22 @@ export const api = {
       workflowId: workflowId ?? null,
     }),
   getWorkflow: (id: string) => call<Workflow>("get_workflow", { id }),
-  prepareWorkflow: (runId: number, correction: string, requestId: string) =>
+  prepareWorkflow: (
+    learning: Learning,
+    requestId: string,
+    runId?: number,
+    correction?: string,
+    id?: string,
+  ) =>
     call<WorkflowDraft>("prepare_workflow", {
-      runId,
-      correction: correction || null,
-      requestId,
-    }),
-  saveWorkflow: (learning: Learning, token?: string, id?: string) =>
-    call<Workflow>("save_workflow", {
       learning,
-      token: token ?? null,
+      requestId,
+      runId: runId ?? null,
+      correction: correction || null,
       id: id ?? null,
     }),
+  saveWorkflow: (token: string) => call<Workflow>("save_workflow", { token }),
+  reset: () => call<void>("reset_session"),
   deleteWorkflow: (id: string) => call<void>("delete_workflow", { id }),
   stop: () => call<void>("stop_task"),
   heartbeat: () => call<void>("ui_heartbeat"),

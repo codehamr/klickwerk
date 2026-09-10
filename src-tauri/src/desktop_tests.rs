@@ -417,11 +417,15 @@ async fn input_suite() -> Result<(), String> {
         capture::unchanged(&screen,&action.action)?;
         execute_fixture(&mut broker,1,screen.frame.clone(),action.action).await?;
         check(unsafe{GetForegroundWindow()}==window,"broker click focuses the disposable editor")?;
+        let before_typing=capture::capture(2,1280,broker.bounds)?;
         let mut frame=screen.frame.clone();frame.foreground=window as usize;
         execute_fixture(&mut broker,2,frame.clone(),Action::Text{text:"Grüße 世界 🪷".into()}).await?;
         tokio::time::sleep(Duration::from_millis(80)).await;
         let read=||{let mut buffer=vec![0u16;8192];let count=unsafe{SendMessageW(edit,WM_GETTEXT,buffer.len(),buffer.as_mut_ptr() as isize)};String::from_utf16_lossy(&buffer[..count.max(0) as usize])};
         check(read()=="Grüße 世界 🪷","real input preserves Unicode, including surrogate pairs")?;
+        check(capture::unchanged(&before_typing,&Action::Text{text:"duplicate".into()}).is_err(),"text input rejects content changed during model inference")?;
+        let current=capture::capture(3,1280,broker.bounds)?;
+        check(capture::unchanged(&current,&Action::Text{text:"next".into()}).is_ok(),"text input accepts an unchanged screen and focused field")?;
         execute_fixture(&mut broker,3,frame.clone(),Action::Key{key:"A".into(),modifiers:vec![crate::action::Modifier::Ctrl]}).await?;
         execute_fixture(&mut broker,4,frame.clone(),Action::Text{text:"Line one\nLine two".into()}).await?;
         tokio::time::sleep(Duration::from_millis(60)).await;
@@ -434,7 +438,7 @@ async fn input_suite() -> Result<(), String> {
         check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"external keyboard input interrupts a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
         check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
-        println!("Disposable input fixture: 8 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
+        println!("Disposable input fixture: 10 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();
     let _ = editor.wait();
