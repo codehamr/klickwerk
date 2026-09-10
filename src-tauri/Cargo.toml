@@ -1,0 +1,58 @@
+[package]
+name = "klickwerk"
+version = "0.2.0"
+description = "A small, thoughtful Windows desktop assistant"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[lib]
+name = "klickwerk_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "klickwerk"
+path = "src/main.rs"
+
+[[bin]]
+name = "klickwerk-safety-tests"
+path = "fixtures/safety.rs"
+required-features = ["safety-tests"]
+
+[features]
+safety-tests = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+url = "2"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = [] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm",
+  "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_SystemInformation",
+  "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Com",
+  "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops",
+  "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem",
+  "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi"
+] }
+windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_System_Com", "Win32_System_Ole"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+tempfile = "3"

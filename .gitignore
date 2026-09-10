@@ -1,0 +1,32 @@
+# Build output
+/build/
+/dist/
+/node_modules/
+/src-tauri/target/
+/src-tauri/gen/
+/test-results/
+/playwright-report/
+*.tsbuildinfo
+config.cfg
+config.invalid-*.cfg
+.config-*.tmp
+*.exe
+*.o
+*.obj
+*.pdb
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.claude/
+.codex/
+*.pem
+*.key
+
+# Local scratch / runtime data
+/data/
+tmp.md
+.codehamr/history/
+.DS_Store
+Thumbs.db

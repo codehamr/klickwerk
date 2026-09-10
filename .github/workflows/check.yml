@@ -1,0 +1,42 @@
+name: Check and build
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-test-results
+          path: test-results
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Rust
+        run: rustup show
+      - run: npm ci
+      - run: npm run test:core
+      - run: npm run desktop:build
+      - name: Verify embedded production frontend and Windows core
+        run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol --lib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: klickwerk-windows-x64
+          path: build/klickwerk.exe

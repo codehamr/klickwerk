@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# Keep the portable Windows EXE independent of the Visual C++ redistributable.
+# Optional source PDBs for Microsoft's prebuilt CRT are not part of a release.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/IGNORE:4099"]

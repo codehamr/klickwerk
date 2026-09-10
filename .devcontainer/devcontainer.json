@@ -1,0 +1,53 @@
+{
+  "name": "klickwerk",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "containerUser": "root",
+  "remoteUser": "root",
+  "init": true,
+  "mounts": [
+    "source=klickwerk-claude,target=/root/.claude,type=volume",
+    "source=klickwerk-codex,target=/root/.codex,type=volume",
+    "source=klickwerk-node-modules,target=${containerWorkspaceFolder}/node_modules,type=volume",
+    "source=klickwerk-cargo-registry,target=/root/.cargo/registry,type=volume",
+    "source=klickwerk-build-cache,target=/root/.cache/klickwerk,type=volume",
+    "source=klickwerk-windows-sdk,target=/root/.cache/xwin,type=volume"
+  ],
+  "postCreateCommand": "npm ci",
+  "forwardPorts": [
+    1420,
+    1455
+  ],
+  "portsAttributes": {
+    "1420": {
+      "label": "klickwerk UI preview",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "rust-analyzer.cargo.target": "x86_64-pc-windows-msvc",
+        "rust-analyzer.check.overrideCommand": [
+          "cargo",
+          "xwin",
+          "check",
+          "--manifest-path",
+          "src-tauri/Cargo.toml",
+          "--target",
+          "x86_64-pc-windows-msvc",
+          "--message-format=json"
+        ]
+      }
+    }
+  }
+}
