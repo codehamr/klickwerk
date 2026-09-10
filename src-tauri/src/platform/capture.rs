@@ -9,6 +9,9 @@ pub struct Capture {
     pub jpeg: Vec<u8>,
     pub focused_control: usize,
     pub excluded: [i32; 4],
+    pub focused_element: Option<crate::diagnostics::FocusedElement>,
+    pub focus_inspection_error: Option<String>,
+    pub foreground_bounds: [i32; 4],
 }
 
 pub fn layout() -> (i32, i32, u32, u32) {
@@ -32,6 +35,30 @@ pub fn capture(id: u64, max_edge: u32, excluded: [i32; 4]) -> Result<Capture, St
     }
     let foreground = unsafe { GetForegroundWindow() } as usize;
     let focused_control = focused_control();
+    let (focused_element, mut focus_inspection_error) =
+        super::focus::inspect(foreground, focused_control);
+    let mut rect = unsafe { std::mem::zeroed() };
+    unsafe {
+        GetWindowRect(foreground as _, &mut rect);
+    }
+    let foreground_bounds = [rect.left, rect.top, rect.right, rect.bottom];
+    let focused_element = focused_element.filter(|element| {
+        let [x, y, right, bottom] = element.bounds;
+        let valid = x >= left
+            && y >= top
+            && right > x
+            && bottom > y
+            && right as i64 <= left as i64 + width as i64
+            && bottom as i64 <= top as i64 + height as i64
+            && x >= rect.left
+            && y >= rect.top
+            && right <= rect.right
+            && bottom <= rect.bottom;
+        if !valid {
+            focus_inspection_error = Some("editable_region_outside_foreground_or_capture".into());
+        }
+        valid
+    });
     let captured_ms = now();
     let mut pixels = read_pixels(left, top, width, height)?;
     if pixels
@@ -82,6 +109,9 @@ pub fn capture(id: u64, max_edge: u32, excluded: [i32; 4]) -> Result<Capture, St
         jpeg,
         focused_control,
         excluded,
+        focused_element,
+        focus_inspection_error,
+        foreground_bounds,
     })
 }
 
@@ -179,6 +209,37 @@ pub fn changed(before: &Capture, after: &Capture) -> bool {
         || crate::settling::changed(&before.pixels, &after.pixels)
 }
 
+pub fn input_effect(before: &Capture, after: &Capture, action: &Action) -> bool {
+    if action.expects_window_transition() {
+        // Taskbar animations and clocks do not confirm that an app has opened.
+        return before.frame.foreground != after.frame.foreground
+            || before.foreground_bounds != after.foreground_bounds;
+    }
+    if matches!(action, Action::Text { .. }) {
+        return keyboard_content_changed(before, after);
+    }
+    changed(before, after)
+}
+
+fn keyboard_content_changed(before: &Capture, after: &Capture) -> bool {
+    if before.frame.foreground != after.frame.foreground
+        || before.focused_control != after.focused_control
+        || before.foreground_bounds != after.foreground_bounds
+        || before.focused_element != after.focused_element
+    {
+        return true;
+    }
+    if let Some(element) = &before.focused_element {
+        return crate::settling::region_changed(
+            &before.pixels,
+            &after.pixels,
+            (before.frame.left, before.frame.top),
+            element.bounds,
+        );
+    }
+    changed(before, after)
+}
+
 // Recheck content and keyboard focus after inference, before granting input.
 pub fn unchanged(capture: &Capture, action: &Action) -> Result<(), String> {
     let frame = &capture.frame;
@@ -203,7 +264,7 @@ pub fn unchanged(capture: &Capture, action: &Action) -> Result<(), String> {
             frame.image_width.max(frame.image_height),
             capture.excluded,
         )?;
-        if changed(capture, &current) {
+        if keyboard_content_changed(capture, &current) {
             return Err(
                 "The screen changed while the model was thinking. Observe again before typing."
                     .into(),

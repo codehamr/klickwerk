@@ -91,6 +91,82 @@ pub struct StepDiagnostics {
     pub input_elapsed_ms: Option<u64>,
     pub targets: Vec<TargetInfo>,
     pub rejection: Option<InputFailure>,
+    #[serde(default)]
+    pub focused_element: Option<FocusedElement>,
+    #[serde(default)]
+    pub focus_inspection_error: Option<String>,
+    #[serde(default)]
+    pub observation: Option<ObservationReport>,
+    #[serde(default)]
+    pub repeat_check: Option<RepeatCheck>,
+    #[serde(default)]
+    pub input_completed_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FocusedElement {
+    pub source: String,
+    pub identity: Vec<i32>,
+    pub bounds: [i32; 4],
+    pub process_id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CaptureSample {
+    pub frame_id: u64,
+    pub captured_ms: u64,
+    pub foreground: usize,
+    pub focused_control: usize,
+    pub changed: bool,
+    pub input_effect_observed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObservationReport {
+    pub reason: String,
+    pub completion: String,
+    pub elapsed_ms: u64,
+    pub previous_input_step_id: Option<u32>,
+    pub since_input_ms: Option<u64>,
+    pub samples: Vec<CaptureSample>,
+}
+impl ObservationReport {
+    pub fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "reason": self.reason, "completion": self.completion, "elapsed_ms": self.elapsed_ms,
+            "previous_input_step_id": self.previous_input_step_id, "since_input_ms": self.since_input_ms,
+            "sample_count": self.samples.len(), "latest_sample": self.samples.last(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RepeatCheck {
+    pub previous_step_id: u32,
+    pub previous_frame_id: u64,
+    pub current_frame_id: u64,
+    pub input_effect_observed: bool,
+    pub outcome: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TerminalDesktop {
+    pub frame_id: Option<u64>,
+    pub capture_error: Option<String>,
+    pub captured_ms: u64,
+    pub foreground: TargetInfo,
+    pub focused_control: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ModelResponse {
+    pub frame_id: u64,
+    pub received_at: u64,
+    pub response_model: Option<String>,
+    pub finish_reason: Option<String>,
+    pub assistant_content: Option<String>,
+    pub content_truncated: bool,
+    pub parse_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

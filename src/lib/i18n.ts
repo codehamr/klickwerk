@@ -345,6 +345,10 @@ const de: Record<string, string> = {
   "Choosing the next action…": "Ich wähle den nächsten Schritt…",
   "Waiting for the desktop to settle…":
     "Ich warte, bis der Desktop bereit ist…",
+  "The repeated input was not sent. Waiting for the app, then checking a fresh screenshot.":
+    "Die wiederholte Eingabe wurde nicht gesendet. Ich warte auf die App und prüfe dann eine neue Bildschirmaufnahme.",
+  "The last input still has no visible result after waiting and checking again. Check the app, then tell me how to continue.":
+    "Auch nach Warten und erneuter Prüfung hat die letzte Eingabe kein sichtbares Ergebnis. Prüfe die App und sag mir, wie es weitergeht.",
   "Writing your document…": "Ich schreibe dein Dokument…",
   "Your task is complete.": "Deine Aufgabe ist abgeschlossen.",
   "Control is paused while you reply.":

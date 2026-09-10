@@ -103,7 +103,7 @@ export interface Attempt {
   > & { language: string };
 }
 export interface SessionExport {
-  schema_version: 2;
+  schema_version: 3;
   exported_at: number;
   app: { name: string; version: string; platform: Snapshot["platform"] };
   run: Run;
@@ -113,9 +113,21 @@ export interface SessionExport {
   evidence: {
     frames_observed: number;
     frames_omitted: number;
+    model_responses_observed: number;
+    model_responses_omitted: number;
+    model_responses: {
+      frame_id: number;
+      received_at: number;
+      response_model: string | null;
+      finish_reason: string | null;
+      assistant_content: string | null;
+      content_truncated: boolean;
+      parse_error: string | null;
+    }[];
     frames: {
       frame: Record<string, number>;
       observed_at: number;
+      purpose: string;
       mime: string;
       jpeg_base64: string;
     }[];
@@ -124,7 +136,12 @@ export interface SessionExport {
     history: "all_recorded_steps_and_attempts";
     screenshots:
       "recent_frames_bounded_12_and_8_mib_base64" | "unavailable_in_preview";
-    raw_model_responses: "not_retained";
+    raw_model_responses:
+      | "recent_assistant_text_bounded_12_and_32_kib_each"
+      | "unavailable_in_preview";
+    controller_revision: string;
+    capture_backend: string;
+    clock: string;
   };
 }
 export interface Snapshot {

@@ -97,7 +97,17 @@ pub fn context(memory: &str, steps: &[Step]) -> String {
     let mut tail = Vec::new();
     let mut bytes = 0;
     for step in steps.iter().rev() {
-        let encoded = serde_json::to_string(step).unwrap_or_default();
+        let mut value = serde_json::to_value(step).unwrap_or_default();
+        // Detailed sampling traces stay in the export, without crowding useful
+        // actions and corrections out of the model's bounded history.
+        if let Some(observation) = step
+            .diagnostics
+            .as_ref()
+            .and_then(|d| d.observation.as_ref())
+        {
+            value["diagnostics"]["observation"] = observation.summary();
+        }
+        let encoded = value.to_string();
         if bytes + encoded.len() > 24000 {
             break;
         }

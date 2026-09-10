@@ -948,7 +948,7 @@ test("JSON export preserves actions, all corrections, attempts and the learned w
     .getByLabel("Your refinement")
     .fill("Next time, add a closing sentence.");
   const report = await exportReport(page);
-  expect(report.schema_version).toBe(2);
+  expect(report.schema_version).toBe(3);
   expect(report.app).toMatchObject({ name: "klickwerk", platform: "preview" });
   expect(report.run.task).toBe("Write Grüße 世界 in an editor");
   expect(report.run.phase).toBe("done");
@@ -971,7 +971,10 @@ test("JSON export preserves actions, all corrections, attempts and the learned w
   expect(report.coverage).toEqual({
     history: "all_recorded_steps_and_attempts",
     screenshots: "unavailable_in_preview",
-    raw_model_responses: "not_retained",
+    raw_model_responses: "unavailable_in_preview",
+    controller_revision: "preview",
+    capture_backend: "unavailable_in_preview",
+    clock: "timestamps_are_unix_ms",
   });
   expect(await savedWorkflows(page)).toHaveLength(0);
   await expect(page.getByLabel("Your refinement")).toHaveValue(

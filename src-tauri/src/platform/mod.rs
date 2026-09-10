@@ -1,6 +1,7 @@
 pub mod broker;
 pub mod capture;
 pub mod export;
+pub mod focus;
 pub mod input;
 pub mod speech;
 pub mod window;

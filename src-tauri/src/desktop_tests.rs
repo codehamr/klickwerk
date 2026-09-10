@@ -258,7 +258,18 @@ unsafe extern "system" fn editor_proc(
                         0,
                         0,
                         (lparam & 0xffff) as i32,
-                        ((lparam >> 16) & 0xffff) as i32,
+                        (((lparam >> 16) & 0xffff) as i32 - 64).max(1),
+                        1,
+                    );
+                }
+                let values = GetDlgItem(window, 2);
+                if !values.is_null() {
+                    MoveWindow(
+                        values,
+                        0,
+                        (((lparam >> 16) & 0xffff) as i32 - 64).max(1),
+                        (lparam & 0xffff) as i32,
+                        64,
                         1,
                     );
                 }
@@ -325,6 +336,20 @@ pub fn editor_if_requested() -> bool {
             instance,
             std::ptr::null(),
         );
+        CreateWindowExW(
+            0,
+            platform::wide("STATIC").as_ptr(),
+            platform::wide("Process values: 100 MB").as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            256,
+            580,
+            64,
+            window,
+            2usize as _,
+            instance,
+            std::ptr::null(),
+        );
         ShowWindow(window, SW_SHOW);
         SetForegroundWindow(window);
         SetFocus(edit);
@@ -378,7 +403,10 @@ async fn input_suite() -> Result<(), String> {
         let deadline=Instant::now()+Duration::from_secs(5);
         let window=loop{
             let value=unsafe{FindWindowW(platform::wide("KlickwerkDisposableEditor").as_ptr(),std::ptr::null())};
-            if !value.is_null(){break value;}
+            // Finding the HWND is not enough: the child may still be creating
+            // controls and about to claim focus. Wait for its message loop.
+            if !value.is_null() && unsafe { IsWindowVisible(value) } != 0
+                && unsafe { SendMessageTimeoutW(value, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, std::ptr::null_mut()) } != 0 { break value; }
             if Instant::now()>deadline{return Err("The disposable editor did not open.".into());}
             tokio::time::sleep(Duration::from_millis(30)).await;
         };
@@ -392,6 +420,7 @@ async fn input_suite() -> Result<(), String> {
             ShowWindow(own, SW_MINIMIZE);
             SetForegroundWindow(window);
             let report = platform::window::handoff(own as usize);
+            if !report.focused { println!("Fixture handoff: {report:?}"); }
             let no_topmost = GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0;
             let own_block = platform::window::inspect(own as usize, std::process::id()).input_block;
             DestroyWindow(own);
@@ -440,6 +469,20 @@ async fn input_suite() -> Result<(), String> {
         check(capture::unchanged(&before_typing,&Action::Text{text:"duplicate".into()}).is_err(),"text input rejects content changed during model inference")?;
         let current=capture::capture(3,1280,broker.bounds)?;
         check(capture::unchanged(&current,&Action::Text{text:"next".into()}).is_ok(),"text input accepts an unchanged screen and focused field")?;
+        check(current.focused_element.as_ref().is_some_and(|field| field.source == "win32_edit" && field.process_id == editor.id()), "capture identifies the actual editable region")?;
+        unsafe { SetWindowTextW(GetDlgItem(window, 2), platform::wide("Process values: 999 MB, refreshed while typing").as_ptr()); }
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let live = capture::capture(4,1280,broker.bounds)?;
+        let global_changed = capture::changed(&current, &live);
+        let field_changed = capture::input_effect(&current, &live, &Action::Text { text: "chr".into() });
+        if !global_changed || field_changed {
+            println!("Live field fixture: global_changed={global_changed}, field_changed={field_changed}, before={:?}, after={:?}, foreground_before={}, foreground_after={}", current.focused_element, live.focused_element, current.frame.foreground, live.frame.foreground);
+        }
+        check(global_changed && !field_changed, "unrelated repainting is not proof that text arrived")?;
+        check(capture::unchanged(&current, &Action::Text { text: "chr".into() }).is_ok(), "an unchanged focused field accepts input while the rest of the app updates")?;
+        unsafe { MoveWindow(edit, 0, 0, 450, 250, 1); }
+        check(capture::unchanged(&current, &Action::Text { text: "chr".into() }).is_err(), "moving or resizing the editable target invalidates the observation")?;
+        unsafe { MoveWindow(edit, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 1); }
         execute_fixture(&mut broker,3,frame.clone(),Action::Key{key:"A".into(),modifiers:vec![crate::action::Modifier::Ctrl]}).await?;
         execute_fixture(&mut broker,4,frame.clone(),Action::Text{text:"Line one\nLine two".into()}).await?;
         tokio::time::sleep(Duration::from_millis(60)).await;
@@ -452,7 +495,7 @@ async fn input_suite() -> Result<(), String> {
         check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"external keyboard input interrupts a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
         check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
-        println!("Disposable input fixture: 13 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
+        println!("Disposable input fixture: 17 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();
     let _ = editor.wait();

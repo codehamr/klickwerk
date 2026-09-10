@@ -106,7 +106,8 @@ physical hardware still needs the manual checks above.
   failed replacement must preserve the previous file. The report is not uploaded.
 - Confirm New task/deletion removes the old export action, and API credentials are
   absent from the report's settings. Recent screenshots are bounded and may
-  contain visible personal content; raw model responses are not retained.
+  contain visible personal content. Assistant response text is bounded; raw HTTP
+  exchanges and private reasoning are not retained.
 
 ## Foreground handoff and target diagnostics
 
@@ -128,3 +129,23 @@ physical hardware still needs the manual checks above.
 - Run beyond 12 observations: all history must remain, while older image evidence
   is evicted and `frames_omitted` increases. New task/deletion must clear evidence.
   Verify raw images are absent from workflow files and UI progress snapshots.
+
+## Delayed launch and live filtering regression
+
+- Start with Task Manager closed. Use the reported task in German and English,
+  including literal `chr`, Memory descending, and the top process/value. Test cold
+  starts under load and already-open windows. Confirm only one launch shortcut is
+  sent while the initial window is delayed, followed by a fresh observation.
+- If a scripted model repeats an unchanged shortcut, verify the action is skipped,
+  the controller observes again, and then either continues from the new window or
+  pauses after another unchanged repetition. Move the mouse during the recovery
+  wait and confirm immediate takeover with no resumed input.
+- Keep process updates enabled. Focus the search field, type `chr`, verify the
+  displayed filter and remaining rows, then verify descending Memory sort before
+  reporting the first row/value. Updates elsewhere must not invalidate a reliably
+  identified unchanged field. Moving/changing that field must still reject input.
+- Export schema 3. Check sampling timestamps, reason/deadline, unique frame IDs,
+  repeat decision, focused field source/bounds, input completion time, bounded model
+  response and terminal frame/window before handoff. Confirm permission failures
+  remain explicit. Wine/editor fixtures do not verify Windows 11 Task Manager's
+  specific WinUI accessibility provider; complete this test on the target PC.

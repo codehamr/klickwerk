@@ -11,11 +11,11 @@ history remains temporary until explicitly exported; workflow storage still
 contains only consolidated start prompts. A saved workflow without its current
 session has no old action history to export.
 
-## JSON schema version 2
+## JSON schema version 3
 
 | Field | Contents |
 | --- | --- |
-| `schema_version` | `2`; version of this report format |
+| `schema_version` | `3`; version of this report format |
 | `exported_at` | Unix timestamp in milliseconds |
 | `app` | Application name, version and `windows` or `preview` platform |
 | `run` | Original task, session ID, current outcome, message, question/result, duration, start time, workflow association, steps and attempts |
@@ -24,10 +24,11 @@ session has no old action history to export.
 | `workflow` | Associated workflow and its current consolidated prompt, or `null` |
 | `warm_start_prompt` | Current learned instructions retained by the session |
 | `unsent_refinement` | Current text in the refinement field, or `null`; it may also have been incorporated into a saved workflow, and does not imply that any action used it |
-| `run.steps[].diagnostics` | Optional capture geometry, foreground/focused control, model latency, observation age, validation/input timing, inspected targets and structured rejection |
+| `run.steps[].diagnostics` | Optional capture geometry, foreground/focused control, model latency, observation age, validation/input timing, inspected targets structured rejection, focused editable region, sampling trace, repeat check and input acknowledgement time |
 | `run.attempts[].handoff` | Native activation method, foreground before/after, visibility, minimized state, verified focus and input-queue attachment error |
-| `evidence` | Observed/omitted frame counts and recent decision screenshots as base64 JPEG, with frame IDs, physical geometry and capture timestamps |
-| `coverage` | Full recorded history, bounded screenshot coverage and unretained raw model responses; the browser preview reports screenshots as unavailable |
+| `run.attempts[].terminal_desktop` | Foreground identity and permissions before restoring klickwerk, terminal frame ID or capture error |
+| `evidence` | Observed/omitted frame and response counts; recent screenshots as base64 JPEG with purpose, frame IDs and geometry; bounded assistant text with response model, finish reason and parsing error |
+| `coverage` | Full recorded history, bounded screenshot/assistant-text coverage, controller revision, capture backend and clock conventions; the browser preview reports real evidence as unavailable |
 
 Unlike bounded context sent to the model during a run, exported history is not
 summarized or truncated. The session's existing 1,000-step capacity still applies.
@@ -46,12 +47,18 @@ Screenshots, window titles and entered text can themselves contain personal or
 sensitive content. Recent decision screenshots stay in RAM, up to 12 frames and
 8 MiB of base64 image data across the whole session, and become persistent only
 when exported. Oldest frames are evicted; oversized images are omitted. The counters
-make these gaps explicit. Frame IDs refer to proposed steps; a request interrupted
-before returning an action also records a system step with the same frame ID.
-These are observations before decisions, not a video or a guarantee of the screen
-state after partial input. Screenshots are excluded from progress snapshots,
-workflow files and text-only consolidation. No audio, raw HTTP exchanges or private
-model reasoning are retained. The app does not upload reports; share the JSON file explicitly when
+make these gaps explicit. Frame IDs are unique capture IDs, independent of step IDs.
+Sampling traces record intermediate frame IDs/times, foreground handles, focus,
+changes and observed input effects; their JPEGs are not retained. Retained images
+are labeled `model_observation` or `before_handoff`. A failed/interrupted model
+request records a system step with its observation. Terminal capture is attempted
+with a two-second timeout after input release and before restoring klickwerk;
+its failure is explicit. These images are not a video or proof of task success. Screenshots are excluded from progress snapshots,
+workflow files and text-only consolidation. The latest 12 assistant message texts are retained, each limited to 32 KiB at UTF-8
+boundaries, with explicit truncation and eviction counts. Parsing failures retain
+the malformed text as well. The configured API key is redacted from retained
+response text/metadata. No audio, raw HTTP exchanges or private model reasoning
+are retained. The app does not upload reports; share the JSON file explicitly when
 using it to diagnose or improve the application.
 
 Windows uses the [Common Item Dialog](https://learn.microsoft.com/en-us/windows/win32/shell/common-file-dialog)
@@ -79,3 +86,31 @@ conditions caused the refusal. The image point `(716, 13)` maps to `(1719, 32)` 
 correct visual target. Version 2 retains the evidence needed to distinguish these
 cases. Its model instructions also require verifying the active app, applied
 filter, sort direction and leading row/value before reporting a result.
+
+## Delayed Task Manager launch regression
+
+The reported schema 2 run (`started_at: 1789044137675`) contains one completed
+Ctrl+Shift+Escape action and one skipped repetition. No text/filter/sort action was
+attempted. Both retained screenshots show the desktop; native foreground metadata
+still identifies Explorer's taskbar (`262198`). Frame 2 was captured approximately
+0.7 seconds after the first input acknowledgement, estimated from the observation
+age plus validation/input durations; schema 2 has no exact input completion timestamp.
+The handoff later reports a different foreground (`3606230`) and activation error 5,
+but contains no identity/permissions for that window. A delayed launch is consistent
+with this evidence and the user's report, while elevation cannot be inferred from
+that error alone.
+
+The controller previously equated a quiet desktop with a completed launch and
+paused immediately when the model proposed the same shortcut. Schema 3 accompanies
+bounded launch waiting, fresh observation before a duplicate pause, and continued
+observation of dynamic views. For this task, the model must still focus the visible
+search field, enter literal `chr`, verify the filter, sort Memory descending, and
+read the first matching row with its displayed memory value. No process is ended.
+
+For the next report, inspect `observation.reason`, `completion`, `samples`,
+`since_input_ms`, `input_completed_ms`, `repeat_check`, `focused_element`, and
+`rejection`. Compare the decision image to the `before_handoff` image and terminal
+window permissions. `input_effect_observed` means a change was detected; it does not
+assert that the requested app/filter/sort succeeded. A higher-integrity Task Manager
+still requires manual input or an ordinary target launch. This feedback changes the
+controller and reusable instructions; it does not train model weights.

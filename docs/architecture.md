@@ -69,13 +69,24 @@ between scalar batches so editors can drain their input queues. CRLF/CR normaliz
 to one Enter action per line break; tab characters use Tab key events. No clipboard
 replacement is necessary.
 
-Before each screenshot is sent to the model, capture samples the screen until it
-has been quiet for 450 ms, after a minimum of 700 ms. Changes reset the quiet period;
-a five-second deadline returns control if the desktop keeps moving. Pixel changes
-are evaluated in local tiles so a small text field cannot disappear inside a global
-change percentage; tiny caret changes are tolerated. Capture and waits run within
-the broker's cancellable heartbeat loop. Repeating the last click/key/text on an
-unchanged scene returns a question instead of duplicating input.
+Capture normally looks for 450 ms of quiet after at least 700 ms. After input,
+a two-second grace period waits for its first observable effect; recognized window
+shortcuts use an eight-second grace period and ignore unrelated taskbar changes.
+Continuously changing screens reach a deadline and yield their latest frame,
+marked as dynamic, so live process tables do not force a pause. Input still needs
+fresh target and focus validation. For independently identified editable fields,
+validation compares field identity, bounds and pixels; unrelated row updates are
+ignored. Win32 EDIT controls are identified directly; windowless WinUI fields use
+read-only UI Automation on the capture worker with bounded provider timeouts. If
+identification fails, validation falls back to the full-screen check. UIA text
+values and passwords are not read. See Microsoft's [UIA transaction timeout](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_transactiontimeout).
+
+Pixel changes are evaluated in local tiles, including within a known field;
+tiny caret changes are tolerated. Capture and waits run within the broker's
+cancellable heartbeat loop. Repeating the last click/key/text with no observed
+effect suppresses the input and requests a fresh observation for up to five seconds.
+If the model proposes the same unchanged input again, the controller pauses with a
+structured rejection. Key aliases and modifier order cannot bypass this check.
 
 The Win32 implementation follows [KEYBDINPUT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput)
 and [SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput).
@@ -183,10 +194,13 @@ or written; the preference and motion overrides have been removed.
 
 ## Diagnostic evidence
 
-Session export schema 2 preserves all recorded steps and attempts, including
+Session export schema 3 preserves all recorded steps and attempts, including
 structured target refusals and handoff verification. A separate shared allocation
-holds the latest 12 decision screenshots within 8 MiB of base64 data, with explicit
-omission counts. It is excluded from UI snapshots and workflow consolidation.
+holds the latest 12 observation/pre-handoff screenshots within 8 MiB of base64 data,
+plus 12 bounded assistant responses, with explicit omission counts. It is excluded from UI snapshots and workflow consolidation.
 Metadata includes physical/image geometry, model latency, validation/input timing,
-window/process identity and integrity levels. Failed model requests retain their
+window/process identity, focused editable regions, integrity levels, sampling traces
+and repeat-guard outcomes. Frame IDs are independent of step IDs. The terminal
+window is inspected and a final capture attempted before restoring klickwerk.
+Sampling traces are condensed only in model context, not in the export. Failed model requests retain their
 observation and a no-input system step. See [session export](session-export.md).

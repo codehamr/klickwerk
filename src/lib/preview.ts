@@ -305,8 +305,15 @@ export async function previewCall<T>(
       if (refinement && new TextEncoder().encode(refinement).length > 16384)
         throw new Error("The refinement is too long to export.");
       const report: SessionExport = {
-        schema_version: 2,
-        evidence: { frames_observed: 0, frames_omitted: 0, frames: [] },
+        schema_version: 3,
+        evidence: {
+          frames_observed: 0,
+          frames_omitted: 0,
+          frames: [],
+          model_responses_observed: 0,
+          model_responses_omitted: 0,
+          model_responses: [],
+        },
         exported_at: Date.now(),
         app: { name: "klickwerk", version, platform: "preview" },
         run: structuredClone(state.run),
@@ -318,7 +325,10 @@ export async function previewCall<T>(
         coverage: {
           history: "all_recorded_steps_and_attempts",
           screenshots: "unavailable_in_preview",
-          raw_model_responses: "not_retained",
+          raw_model_responses: "unavailable_in_preview",
+          controller_revision: "preview",
+          capture_backend: "unavailable_in_preview",
+          clock: "timestamps_are_unix_ms",
         },
       };
       const filename = `klickwerk-session-${report.run.id}-${report.exported_at}.json`;

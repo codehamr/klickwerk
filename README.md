@@ -88,18 +88,23 @@ Action history stays in memory for the current session, including after a save s
 that you can continue refining. Only the consolidated prompt, name, ID and update
 time are written to `workflows.json` beside the EXE. Old workflow memory is merged
 into its prompt on load; the next library write removes legacy raw history.
-Explicit JSON exports are separate files and include recent decision screenshots
-(up to 12 frames, bounded to 8 MiB of image data), window details and timing.
+Explicit JSON exports are separate files and include recent observation and pre-handoff screenshots
+(up to 12 frames, bounded to 8 MiB of image data), window details, timing, recovery
+decisions and bounded assistant responses.
 Screenshots otherwise remain temporary in RAM; audio is not saved.
 **New task** and workflow deletion discard
 the temporary session. There is no persistent list of previous tasks.
 
-Before each model observation, the controller waits at least 700 ms and requires
-450 ms of visual quiet, with a five-second limit. Small caret changes are ignored.
-Text is paced; after model inference, screen content and the focused text field
-are checked again before typing. A repeated click, key or text action with no
-visible change returns a question instead of silently sending duplicate input.
-All waiting remains interruptible.
+Before each model observation, the controller normally waits at least 700 ms and
+looks for 450 ms of visual quiet. After input it allows two seconds for an initial
+effect; recognized window shortcuts, including Ctrl+Shift+Escape, allow eight seconds
+for a foreground transition. Continuously updating views yield a fresh observation
+at the deadline instead of automatically pausing. Text is paced and revalidated
+against the same focused field, using Win32/UI Automation field identity and bounds
+when available, otherwise the full screen. A repeated click, key or text action with
+no observed effect is suppressed for one further observation of up to five seconds.
+Only a repeated failure after that recovery asks the user to intervene. All waiting
+remains interruptible, and visible completion still needs model verification.
 
 ## Develop
 

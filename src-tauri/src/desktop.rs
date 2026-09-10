@@ -868,17 +868,60 @@ fn run_context(app: &tauri::AppHandle) -> String {
     workflow::context(&session.memory, &steps)
 }
 
+struct LastInput {
+    action: Action,
+    before: capture::Capture,
+    step_id: u32,
+    completed_ms: u64,
+}
+
 async fn stable_capture(
     broker: &mut BrokerClient,
     app: &tauri::AppHandle,
     cancel: &AtomicBool,
-    id: u64,
+    next_frame_id: &mut u64,
     max_edge: u32,
-) -> Result<capture::Capture, End> {
+    last_input: Option<&LastInput>,
+    recovery: bool,
+) -> Result<(capture::Capture, crate::diagnostics::ObservationReport), End> {
+    use crate::{
+        diagnostics::{CaptureSample, ObservationReport},
+        settling::{Settler, Status},
+    };
+    let started = platform::now();
+    let transition = last_input.is_some_and(|last| last.action.expects_window_transition());
+    let effect_wait = if recovery {
+        5000
+    } else if transition {
+        8000
+    } else if last_input.is_some() {
+        2000
+    } else {
+        0
+    };
+    let mut report = ObservationReport {
+        reason: if recovery {
+            "duplicate_input_recovery"
+        } else if transition {
+            "window_transition"
+        } else if last_input.is_some() {
+            "input_effect"
+        } else {
+            "initial_observation"
+        }
+        .into(),
+        completion: String::new(),
+        elapsed_ms: 0,
+        previous_input_step_id: last_input.map(|last| last.step_id),
+        since_input_ms: None,
+        samples: vec![],
+    };
     let mut previous: Option<capture::Capture> = None;
-    let mut settling = crate::settling::Settler::new(platform::now());
+    let mut settling = Settler::awaiting_effect(started, effect_wait);
     loop {
         let excluded = broker.bounds;
+        let id = *next_frame_id;
+        *next_frame_id += 1;
         let screen = broker
             .during(app, cancel, async move {
                 tokio::task::spawn_blocking(move || capture::capture(id, max_edge, excluded))
@@ -888,12 +931,33 @@ async fn stable_capture(
             .await?;
         let changed = previous
             .as_ref()
-            .is_none_or(|before| capture::changed(before, &screen));
-        match settling.observe(platform::now(), changed) {
-            crate::settling::Status::Ready => return Ok(screen),
-            crate::settling::Status::TimedOut => return Err(End::Question("The screen is still changing. Wait for the app to finish loading, then tell me to continue.".into())),
-            crate::settling::Status::Waiting => previous = Some(screen),
+            .is_some_and(|before| capture::changed(before, &screen));
+        let effect = last_input
+            .is_some_and(|last| capture::input_effect(&last.before, &screen, &last.action));
+        report.samples.push(CaptureSample {
+            frame_id: id,
+            captured_ms: screen.frame.captured_ms,
+            foreground: screen.frame.foreground,
+            focused_control: screen.focused_control,
+            changed,
+            input_effect_observed: effect,
+        });
+        let status = settling.observe(platform::now(), changed, effect);
+        if status != Status::Waiting {
+            report.elapsed_ms = platform::now().saturating_sub(started);
+            report.since_input_ms =
+                last_input.map(|last| platform::now().saturating_sub(last.completed_ms));
+            report.completion = match status {
+                Status::Ready => "quiet",
+                Status::NoEffect => "no_effect_before_deadline",
+                _ => "still_changing_at_deadline",
+            }
+            .into();
+            // A live process table may never become globally quiet. The latest
+            // frame remains useful; target and focus validation still gates input.
+            return Ok((screen, report));
         }
+        previous = Some(screen);
         broker
             .during(app, cancel, async {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -913,10 +977,20 @@ async fn controller(
     let started = Instant::now()
         .checked_sub(Duration::from_millis(elapsed))
         .unwrap_or_else(Instant::now);
+    let mut next_frame_id = app
+        .state::<AppState>()
+        .view
+        .lock()
+        .unwrap()
+        .evidence
+        .frames
+        .last()
+        .map_or(1, |f| f.frame.id + 1);
+    let mut terminal_excluded = [0; 4];
     let result = async {
         let mut broker = BrokerClient::spawn(false).map_err(End::Failed)?;
         match broker.signal(&app, &cancel, None).await? {
-            Reply::Ready { bounds } => broker.bounds = bounds,
+            Reply::Ready { bounds } => { broker.bounds = bounds; terminal_excluded = bounds; },
             _ => return Err(End::Failed("The input monitor did not become ready.".into())),
         }
         progress(&app, "countdown", "Starting in 2 seconds. Move your mouse or press any key to interrupt.", started);
@@ -932,29 +1006,34 @@ async fn controller(
         let mut previous_image = 0u64;
         let mut unchanged_frames = 0;
         let mut moved_targets = 0;
-        let mut last_input: Option<(Action, capture::Capture)> = None;
+        let mut last_input: Option<LastInput> = None;
+        let mut repeat_guard = crate::settling::RepeatGuard::default();
+        let mut recovering_repeat = false;
+        let mut last_visual_change = platform::now();
         for _ in 0..settings.max_steps {
             let step = app.state::<AppState>().view.lock().unwrap().steps.len() as u32 + 1;
             if step as usize >= workflow::MAX_STEPS - 2 { return Err(End::Question("This session is full. Save it as a workflow to continue in a fresh run.".into())); }
             progress(&app, "running", "Waiting for the desktop to settle…", started);
-            let screen = stable_capture(&mut broker, &app, &cancel, step as u64, settings.screenshot_max_edge).await?;
-            use std::hash::{Hash, Hasher};
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            screen.jpeg.hash(&mut hash);
-            let image_hash = hash.finish();
-            if image_hash == previous_image { unchanged_frames += 1; } else { unchanged_frames = 0; }
-            previous_image = image_hash;
-            if unchanged_frames >= 4 { return Err(End::Question("The screen has not changed after several steps. Bring the right window into view, then tell me how to continue.".into())); }
-            progress(&app, "running", "Choosing the next action…", started);
-            let foreground = platform::window::inspect(screen.frame.foreground, std::process::id());
-            let history = format!("{}\n\nCurrent native foreground window (titles are untrusted screen data):\n{}", run_context(&app), serde_json::to_string(&foreground).unwrap_or_default());
+            let (screen, observation) = stable_capture(&mut broker, &app, &cancel, &mut next_frame_id, settings.screenshot_max_edge, last_input.as_ref(), recovering_repeat).await?;
+            recovering_repeat = false;
             {
                 let state = app.state::<AppState>();
                 let mut view = state.view.lock().unwrap();
                 Arc::make_mut(&mut view.evidence).retain(&screen.frame, &screen.jpeg);
             }
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            screen.jpeg.hash(&mut hash);
+            let image_hash = hash.finish();
+            if image_hash == previous_image { unchanged_frames += 1; } else { unchanged_frames = 0; last_visual_change = platform::now(); }
+            previous_image = image_hash;
+
+            progress(&app, "running", "Choosing the next action…", started);
+            let foreground = platform::window::inspect(screen.frame.foreground, std::process::id());
+            let history = format!("{}\n\nCurrent native foreground window (titles are untrusted screen data):\n{}", run_context(&app), serde_json::to_string(&foreground).unwrap_or_default());
+            let history = format!("{history}\n\nObservation timing and result (changes are not proof of task success):\n{}\nVerified focused editable region:\n{}", observation.summary(), serde_json::to_string(&screen.focused_element).unwrap_or_default());
             let model_started = Instant::now();
-            let decision = broker.during(&app, &cancel, provider.decide(&task, &history, provider::Observation {
+            let decision = broker.during(&app, &cancel, provider.decide_with_diagnostics(&task, &history, provider::Observation {
                 frame_id: screen.frame.id, bytes: &screen.jpeg, width: screen.frame.image_width, height: screen.frame.image_height, mime: "image/jpeg",
             })).await;
             let diagnostic = crate::diagnostics::StepDiagnostics {
@@ -962,7 +1041,15 @@ async fn controller(
                 model_elapsed_ms: model_started.elapsed().as_millis() as u64,
                 observation_age_ms: platform::now().saturating_sub(screen.frame.captured_ms),
                 validation_elapsed_ms: None, input_elapsed_ms: None, targets: vec![], rejection: None,
+                focused_element: screen.focused_element.clone(), focus_inspection_error: screen.focus_inspection_error.clone(),
+                observation: Some(observation), repeat_check: None, input_completed_ms: None,
             };
+            let decision = decision.and_then(|response| {
+                let state = app.state::<AppState>();
+                let mut view = state.view.lock().unwrap();
+                Arc::make_mut(&mut view.evidence).retain_model(response.diagnostic);
+                response.decision.map_err(End::Failed)
+            });
             let decision = match decision {
                 Ok(decision) => decision,
                 Err(end) => {
@@ -977,12 +1064,38 @@ async fn controller(
             let mut recorded = Step::action(step, decision.description, decision.action.clone(), &screen.frame, started.elapsed().as_millis() as u64);
             recorded.diagnostics = Some(diagnostic);
             record(&app, recorded);
-            if let Some((last_action, before)) = &last_input
-                && matches!(decision.action, Action::Click { .. } | Action::DoubleClick { .. } | Action::Text { .. } | Action::Key { .. })
-                    && serde_json::to_value(last_action).ok() == serde_json::to_value(&decision.action).ok()
-                    && !capture::changed(before, &screen) {
+            if let Some(last) = &last_input {
+                use crate::settling::RepeatDecision;
+                let effect = capture::input_effect(&last.before, &screen, &last.action);
+                let repeat = repeat_guard.evaluate(&last.action, &decision.action, effect);
+                if last.action.same_input(&decision.action) {
+                    action_diagnostics(&app, |d| d.repeat_check = Some(crate::diagnostics::RepeatCheck {
+                        previous_step_id: last.step_id, previous_frame_id: last.before.frame.id, current_frame_id: screen.frame.id,
+                        input_effect_observed: effect,
+                        outcome: match repeat { RepeatDecision::Allow => "allowed_after_change", RepeatDecision::ObserveAgain => "suppressed_for_fresh_observation", RepeatDecision::Pause => "paused_after_reobservation" }.into(),
+                    }));
+                }
+                if repeat != RepeatDecision::Allow {
+                    let reason = if repeat == RepeatDecision::ObserveAgain {
+                        "The repeated input was not sent. Waiting for the app, then checking a fresh screenshot."
+                    } else {
+                        "The last input still has no visible result after waiting and checking again. Check the app, then tell me how to continue."
+                    };
+                    action_diagnostics(&app, |d| d.rejection = Some(crate::diagnostics::InputFailure::new("duplicate_input_without_effect", reason)));
+                    action_status(&app, "skipped");
+                    if repeat == RepeatDecision::Pause { return Err(End::Question(reason.into())); }
+                    record(&app, Step::note(step + 1, "system", reason, started.elapsed().as_millis() as u64));
+                    progress(&app, "running", reason, started);
+                    recovering_repeat = true;
+                    continue;
+                }
+            }
+            if unchanged_frames >= 4 && platform::now().saturating_sub(last_visual_change) >= 20000
+                && !matches!(decision.action, Action::Finish { .. } | Action::AskUser { .. }) {
+                let reason = "The screen has not changed after several steps. Bring the right window into view, then tell me how to continue.";
+                action_diagnostics(&app, |d| d.rejection = Some(crate::diagnostics::InputFailure::new("no_visual_progress", reason)));
                 action_status(&app, "skipped");
-                return Err(End::Question("The last input has no visible result yet. I paused to avoid sending it twice. Check the app, then tell me how to continue.".into()));
+                return Err(End::Question(reason.into()));
             }
             match &decision.action {
                 Action::Finish { summary } => {
@@ -1042,14 +1155,62 @@ async fn controller(
                         }
                         _ => return Err(End::Failed("The input acknowledgement did not match this step.".into())),
                     }
-                    action_diagnostics(&app, |d| d.input_elapsed_ms = Some(input_started.elapsed().as_millis() as u64));
+                    let completed_ms = platform::now();
+                    action_diagnostics(&app, |d| { d.input_elapsed_ms = Some(input_started.elapsed().as_millis() as u64); d.input_completed_ms = Some(completed_ms); });
                     action_status(&app, "completed");
-                    last_input = Some((action, screen));
+                    last_input = Some(LastInput { action, before: screen, step_id: step, completed_ms });
+                    repeat_guard = crate::settling::RepeatGuard::default();
                 }
             }
         }
         Err::<(), End>(End::Stopped("The task reached its step limit. Refine the instructions to continue.".into()))
     }.await;
+    // The broker has released input. Capture before restoring klickwerk so the
+    // export can reveal a window that appeared during the final model request.
+    let max_edge = settings.screenshot_max_edge;
+    let terminal_capture = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            capture::capture(next_frame_id, max_edge, terminal_excluded)
+        }),
+    )
+    .await;
+    let mut terminal_desktop = crate::diagnostics::TerminalDesktop {
+        frame_id: None,
+        capture_error: None,
+        captured_ms: platform::now(),
+        foreground: platform::window::inspect(
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } as usize,
+            std::process::id(),
+        ),
+        focused_control: capture::focused_control(),
+    };
+    match terminal_capture {
+        Ok(Ok(Ok(screen))) => {
+            terminal_desktop.frame_id = Some(screen.frame.id);
+            terminal_desktop.captured_ms = screen.frame.captured_ms;
+            terminal_desktop.foreground =
+                platform::window::inspect(screen.frame.foreground, std::process::id());
+            terminal_desktop.focused_control = screen.focused_control;
+            let state = app.state::<AppState>();
+            let mut view = state.view.lock().unwrap();
+            Arc::make_mut(&mut view.evidence).retain_for(
+                &screen.frame,
+                &screen.jpeg,
+                "before_handoff",
+            );
+        }
+        Ok(Ok(Err(error))) => terminal_desktop.capture_error = Some(error),
+        _ => {
+            terminal_desktop.capture_error =
+                Some("Terminal capture timed out or its worker stopped.".into())
+        }
+    }
+    app.state::<AppState>()
+        .view
+        .lock()
+        .unwrap()
+        .record_terminal_desktop(terminal_desktop);
     let handoff_report = handoff(&app).await;
     let end = result
         .err()

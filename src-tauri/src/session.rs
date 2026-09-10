@@ -58,6 +58,7 @@ pub struct Attempt {
     question: String,
     settings: ExecutionSettings,
     handoff: Option<crate::diagnostics::Handoff>,
+    terminal_desktop: Option<crate::diagnostics::TerminalDesktop>,
 }
 
 #[derive(Clone, Serialize)]
@@ -122,12 +123,19 @@ impl RunView {
             question: String::new(),
             settings: settings.into(),
             handoff: None,
+            terminal_desktop: None,
         });
     }
 
     pub fn record_handoff(&mut self, handoff: crate::diagnostics::Handoff) {
         if let Some(attempt) = self.attempts.last_mut() {
             attempt.handoff = Some(handoff);
+        }
+    }
+
+    pub fn record_terminal_desktop(&mut self, desktop: crate::diagnostics::TerminalDesktop) {
+        if let Some(attempt) = self.attempts.last_mut() {
+            attempt.terminal_desktop = Some(desktop);
         }
     }
 
@@ -154,11 +162,15 @@ pub struct Evidence {
     pub frames_observed: usize,
     pub frames_omitted: usize,
     pub frames: Vec<ScreenEvidence>,
+    pub model_responses_observed: usize,
+    pub model_responses_omitted: usize,
+    pub model_responses: Vec<crate::diagnostics::ModelResponse>,
 }
 #[derive(Clone, Serialize)]
 pub struct ScreenEvidence {
     pub frame: crate::guard::Frame,
     pub observed_at: u64,
+    pub purpose: String,
     pub mime: &'static str,
     pub jpeg_base64: String,
 }
@@ -166,7 +178,20 @@ impl Evidence {
     pub const MAX_FRAMES: usize = 12;
     pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
+    pub fn retain_model(&mut self, response: crate::diagnostics::ModelResponse) {
+        self.model_responses_observed += 1;
+        if self.model_responses.len() >= Self::MAX_FRAMES {
+            self.model_responses.remove(0);
+            self.model_responses_omitted += 1;
+        }
+        self.model_responses.push(response);
+    }
+
     pub fn retain(&mut self, frame: &crate::guard::Frame, jpeg: &[u8]) {
+        self.retain_for(frame, jpeg, "model_observation");
+    }
+
+    pub fn retain_for(&mut self, frame: &crate::guard::Frame, jpeg: &[u8], purpose: &str) {
         use base64::Engine;
         self.frames_observed += 1;
         if jpeg.len().div_ceil(3) * 4 > Self::MAX_BYTES {
@@ -189,6 +214,7 @@ impl Evidence {
         self.frames.push(ScreenEvidence {
             frame: frame.clone(),
             observed_at: timestamp(),
+            purpose: purpose.into(),
             mime: "image/jpeg",
             jpeg_base64: encoded,
         });
@@ -206,6 +232,9 @@ struct Coverage {
     history: &'static str,
     screenshots: &'static str,
     raw_model_responses: &'static str,
+    controller_revision: &'static str,
+    capture_backend: &'static str,
+    clock: &'static str,
 }
 #[derive(Serialize)]
 pub struct SessionExport {
@@ -236,7 +265,7 @@ impl SessionExport {
             return Err("The refinement is too long to export.".into());
         }
         Ok(Self {
-            schema_version: 2,
+            schema_version: 3,
             evidence: (*run.evidence).clone(),
             exported_at: timestamp(),
             app: AppInfo {
@@ -251,7 +280,10 @@ impl SessionExport {
             coverage: Coverage {
                 history: "all_recorded_steps_and_attempts",
                 screenshots: "recent_frames_bounded_12_and_8_mib_base64",
-                raw_model_responses: "not_retained",
+                raw_model_responses: "recent_assistant_text_bounded_12_and_32_kib_each",
+                controller_revision: crate::provider::CONTROLLER_REVISION,
+                capture_backend: "gdi_bitblt_physical_virtual_desktop",
+                clock: "captured_ms_and_input_completed_ms_are_monotonic_other_timestamps_are_unix_ms",
             },
         })
     }
@@ -334,7 +366,7 @@ mod tests {
         assert!(snapshot.get("evidence").is_none());
         let export = SessionExport::new(run.clone(), 1, None, String::new(), None).unwrap();
         let json = serde_json::to_value(export).unwrap();
-        assert_eq!(json["schema_version"], 2);
+        assert_eq!(json["schema_version"], 3);
         assert_eq!(json["evidence"]["frames_observed"], 15);
         assert_eq!(json["evidence"]["frames"][11]["frame"]["id"], 15);
         assert!(
@@ -348,6 +380,62 @@ mod tests {
         Arc::make_mut(&mut run.evidence).retain(&frame, &vec![0; 5 * 1024 * 1024]);
         assert_eq!(run.evidence.frames.len(), 1);
         assert!(run.evidence.frames[0].jpeg_base64.len() <= Evidence::MAX_BYTES);
+    }
+
+    #[test]
+    fn model_diagnostics_and_terminal_evidence_survive_export_with_explicit_coverage() {
+        let mut run = RunView {
+            id: 1,
+            phase: "waiting".into(),
+            ..RunView::default()
+        };
+        run.begin_attempt(&Settings::default(), 1, None, "");
+        for frame_id in 1..=15 {
+            Arc::make_mut(&mut run.evidence).retain_model(crate::diagnostics::ModelResponse {
+                frame_id,
+                received_at: 1000,
+                response_model: Some("fixture".into()),
+                finish_reason: Some("stop".into()),
+                assistant_content: Some("fixture-response".into()),
+                content_truncated: false,
+                parse_error: None,
+            });
+        }
+        run.record_terminal_desktop(crate::diagnostics::TerminalDesktop {
+            frame_id: None,
+            capture_error: Some("Fixture capture unavailable.".into()),
+            captured_ms: 5000,
+            foreground: crate::diagnostics::TargetInfo {
+                window: crate::diagnostics::WindowInfo {
+                    handle: 456,
+                    executable: "Taskmgr.exe".into(),
+                    ..Default::default()
+                },
+                sender_integrity_level: Some(8192),
+                input_block: None,
+            },
+            focused_control: 789,
+        });
+        assert!(
+            serde_json::to_value(&run)
+                .unwrap()
+                .get("evidence")
+                .is_none()
+        );
+        let json =
+            serde_json::to_value(SessionExport::new(run, 1, None, String::new(), None).unwrap())
+                .unwrap();
+        assert_eq!(json["evidence"]["model_responses_observed"], 15);
+        assert_eq!(json["evidence"]["model_responses_omitted"], 3);
+        assert_eq!(json["evidence"]["model_responses"][0]["frame_id"], 4);
+        assert_eq!(
+            json["run"]["attempts"][0]["terminal_desktop"]["foreground"]["window"]["executable"],
+            "Taskmgr.exe"
+        );
+        assert_eq!(
+            json["coverage"]["controller_revision"],
+            crate::provider::CONTROLLER_REVISION
+        );
     }
 
     #[test]

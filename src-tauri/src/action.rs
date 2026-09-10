@@ -88,6 +88,41 @@ impl Decision {
 }
 
 impl Action {
+    pub fn same_input(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Key {
+                    key: a,
+                    modifiers: am,
+                },
+                Self::Key {
+                    key: b,
+                    modifiers: bm,
+                },
+            ) => {
+                key_code(a) == key_code(b)
+                    && am.len() == bm.len()
+                    && am.iter().all(|m| bm.contains(m))
+            }
+            _ => serde_json::to_value(self).ok() == serde_json::to_value(other).ok(),
+        }
+    }
+
+    pub fn expects_window_transition(&self) -> bool {
+        match self {
+            Self::Key { key, modifiers } => {
+                (key_code(key) == Some(0x1b)
+                    && modifiers.len() == 2
+                    && modifiers.contains(&Modifier::Ctrl)
+                    && modifiers.contains(&Modifier::Shift))
+                    || (key.eq_ignore_ascii_case("TAB") && modifiers.contains(&Modifier::Alt))
+                    || key_code(key) == Some(0x5b)
+                    || modifiers.contains(&Modifier::Win)
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_input(&self) -> bool {
         !matches!(
             self,
