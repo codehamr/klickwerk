@@ -60,6 +60,32 @@ pub struct AppState {
     drafts: Mutex<HashMap<String, PreparedWorkflow>>,
 }
 impl AppState {
+    fn fail_resume_setup(&self, run_id: u64, source: &str, message: &str) -> bool {
+        let mut active = self.active.lock().unwrap();
+        if active.is_some() {
+            return false;
+        }
+        let mut view = self.view.lock().unwrap();
+        if view.id != run_id || view.phase != "recovering" {
+            return false;
+        }
+        self.pending_resume.lock().unwrap().take();
+        view.phase = "error".into();
+        view.message = message.into();
+        view.recovery_event(
+            "automatic_resume_failed",
+            source,
+            None,
+            Some(crate::diagnostics::InputFailure::new(
+                "resume_setup_failed",
+                message,
+            )),
+        );
+        // Reserve presentation so a late startup callback cannot race a new run.
+        *active = Some(Arc::new(AtomicBool::new(true)));
+        true
+    }
+
     fn snapshot(&self) -> Snapshot {
         let (settings, has_api_key, config_path, config_error) = {
             let config = self.config.lock().unwrap();
@@ -201,20 +227,27 @@ async fn test_connection(
     network(app, request_id, provider.check()).await
 }
 #[tauri::command]
-fn stop_task(app: tauri::AppHandle) {
-    let state = app.state::<AppState>();
-    let active = state.active.lock().unwrap();
-    if let Some(cancel) = active.as_ref() {
-        cancel.store(true, Ordering::SeqCst);
-    }
-    if state.pending_resume.lock().unwrap().take().is_some() {
-        let mut view = state.view.lock().unwrap();
-        view.phase = "stopped".into();
-        view.message = crate::recovery::RESUME_CANCELLED.into();
-        view.recovery_event("automatic_resume_cancelled", "stop_button", None, None);
-    }
-    drop(active);
+async fn stop_task(app: tauri::AppHandle) {
+    let pending_stopped = {
+        let state = app.state::<AppState>();
+        let mut active = state.active.lock().unwrap();
+        if let Some(cancel) = active.as_ref() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        let pending_stopped = state.pending_resume.lock().unwrap().take().is_some();
+        if pending_stopped {
+            let mut view = state.view.lock().unwrap();
+            view.phase = "stopped".into();
+            view.message = crate::recovery::RESUME_CANCELLED.into();
+            view.recovery_event("automatic_resume_cancelled", "stop_button", None, None);
+            *active = Some(Arc::new(AtomicBool::new(true)));
+        }
+        pending_stopped
+    };
     emit(&app);
+    if pending_stopped {
+        return_control(&app).await;
+    }
 }
 
 #[tauri::command]
@@ -366,7 +399,7 @@ fn start_task_inner(
 }
 
 #[tauri::command]
-fn resume_after_restart(app: tauri::AppHandle, run_id: u64) -> Result<(), String> {
+async fn resume_after_restart(app: tauri::AppHandle, run_id: u64) -> Result<(), String> {
     let (task, refinement) = {
         let state = app.state::<AppState>();
         if *state.pending_resume.lock().unwrap() != Some(run_id) {
@@ -389,24 +422,12 @@ fn resume_after_restart(app: tauri::AppHandle, run_id: u64) -> Result<(), String
         None,
         true,
     );
-    if let Err(message) = &result {
-        let state = app.state::<AppState>();
-        let mut view = state.view.lock().unwrap();
-        if view.id == run_id && view.phase == "recovering" {
-            view.phase = "error".into();
-            view.message = message.clone();
-            view.recovery_event(
-                "automatic_resume_failed",
-                "ui_ready",
-                None,
-                Some(crate::diagnostics::InputFailure::new(
-                    "resume_setup_failed",
-                    message,
-                )),
-            );
-        }
-        drop(view);
-        emit(&app);
+    if let Err(message) = &result
+        && app
+            .state::<AppState>()
+            .fail_resume_setup(run_id, "ui_ready", message)
+    {
+        return_control(&app).await;
     }
     result
 }
@@ -495,7 +516,7 @@ async fn perform_restart(
         Err(failure) => {
             {
                 let state = app.state::<AppState>();
-                let mut active = state.active.lock().unwrap();
+                let _active = state.active.lock().unwrap();
                 let mut view = state.view.lock().unwrap();
                 view.phase = "stopped".into();
                 view.message = failure.message.clone();
@@ -507,15 +528,8 @@ async fn perform_restart(
                         .map(|p| p.0),
                     Some(failure.clone()),
                 );
-                *active = None;
             }
-            let report = handoff(&app).await;
-            app.state::<AppState>()
-                .view
-                .lock()
-                .unwrap()
-                .record_handoff(report);
-            emit(&app);
+            return_control(&app).await;
             Err(failure.message)
         }
     }
@@ -1086,12 +1100,12 @@ async fn handoff_once(app: &tauri::AppHandle) -> crate::diagnostics::Handoff {
     let (sender, receiver) = oneshot::channel();
     let handle = app.clone();
     let scheduled = app.run_on_main_thread(move || {
+        if sender.is_closed() {
+            return;
+        }
         let report = handle.get_webview_window("main").and_then(|window| {
             let hwnd = window.hwnd().ok()?;
             let report = platform::window::handoff(hwnd.0 as usize);
-            if !report.focused {
-                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
-            }
             Some(report)
         });
         let _ = sender.send(report);
@@ -1110,6 +1124,46 @@ async fn handoff_once(app: &tauri::AppHandle) -> crate::diagnostics::Handoff {
         focused: false,
         attachment_error: None,
         topmost_retained: false,
+    }
+}
+
+async fn return_control(app: &tauri::AppHandle) {
+    // Publish the terminal view before showing it. Keep the activity reservation
+    // until all foreground retries finish so they cannot surface over a new run.
+    emit(app);
+    let report = handoff(app).await;
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.active.lock().unwrap();
+        state.view.lock().unwrap().record_handoff(report);
+        *active = None;
+    }
+    emit(app);
+}
+
+async fn prepare_control_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let (sender, receiver) = oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if sender.is_closed() {
+            return;
+        }
+        let result = (|| {
+            let window = handle
+                .get_webview_window("main")
+                .ok_or("The main window is unavailable.")?;
+            let hwnd = window
+                .hwnd()
+                .map_err(|_| "The main window is unavailable.")?;
+            let _ = window.request_user_attention(None);
+            platform::window::minimize_for_control(hwnd.0 as usize)
+        })();
+        let _ = sender.send(result);
+    })
+    .map_err(|_| "The main window is unavailable.")?;
+    match tokio::time::timeout(Duration::from_secs(2), receiver).await {
+        Ok(Ok(result)) => result,
+        _ => Err("The main window could not be minimized.".into()),
     }
 }
 
@@ -1251,10 +1305,7 @@ async fn controller(
             _ => return Err(End::Failed("The input monitor could not start.".into())),
         }
         progress(&app, "running", "Taking a look at your desktop…", started);
-        if let Some(window) = app.get_webview_window("main") {
-            if let Ok(hwnd) = window.hwnd() { platform::window::release_handoff_topmost(hwnd.0 as usize); }
-            window.minimize().map_err(|_| End::Failed("The main window could not be minimized.".into()))?;
-        }
+        broker.during(&app, &cancel, prepare_control_window(&app)).await?;
         broker.during(&app, &cancel, async { tokio::time::sleep(Duration::from_millis(180)).await; Ok(()) }).await?;
         let provider = Provider::new(&settings).map_err(End::Failed)?;
         let mut previous_image = 0u64;
@@ -1472,14 +1523,13 @@ async fn controller(
         .lock()
         .unwrap()
         .record_terminal_desktop(terminal_desktop);
-    let handoff_report = handoff(&app).await;
     let end = result
         .err()
         .unwrap_or_else(|| End::Done("Finished.".into()));
     let mut automatic = None;
     {
         let state = app.state::<AppState>();
-        let mut active = state.active.lock().unwrap();
+        let _active = state.active.lock().unwrap();
         let mut view = state.view.lock().unwrap();
         view.elapsed_ms = started.elapsed().as_millis() as u64;
         if let Some(step) = view
@@ -1534,7 +1584,6 @@ async fn controller(
                 view.result = summary;
             }
         }
-        view.record_handoff(handoff_report);
         view.finish_attempt();
         if view.recovery.is_some() {
             match crate::recovery::automatic_session(
@@ -1548,9 +1597,6 @@ async fn controller(
                 }
             }
         }
-        if automatic.is_none() {
-            *active = None;
-        }
     }
     emit(&app);
     if let Some(session) = automatic {
@@ -1559,11 +1605,21 @@ async fn controller(
             .and_then(|window| window.hwnd().ok())
             .map_or(0, |handle| handle.0 as usize);
         let _ = perform_restart(app, owner, session, cancel, crate::recovery::AUTO_SOURCE).await;
+    } else {
+        return_control(&app).await;
     }
 }
 
-fn app_context() -> tauri::Context<tauri::Wry> {
+fn app_context(background_resume: bool) -> tauri::Context<tauri::Wry> {
     let mut context = tauri::generate_context!();
+    if background_resume {
+        for window in &mut context.config_mut().app.windows {
+            if window.label == "main" {
+                window.visible = false;
+                window.focus = false;
+            }
+        }
+    }
     if !tauri::is_dev() {
         context.config_mut().build.dev_url = None;
     }
@@ -1605,13 +1661,16 @@ pub fn run() {
     let _mutex = platform::Handle(mutex);
     let config = ConfigStore::beside_executable();
     let workflows = WorkflowStore::load(config.path.with_file_name("workflows.json"));
-    let (view, memory, refinement, pending_resume) = restored.map_or_else(
+    let (mut view, memory, refinement, pending_resume) = restored.map_or_else(
         || (RunView::default(), String::new(), String::new(), None),
         |session| {
             let pending = session.resume_after_approval.then_some(session.run.id);
             (session.run, session.memory, session.refinement, pending)
         },
     );
+    if pending_resume.is_some() {
+        view.recovery_event("background_resume_startup", "window_lifecycle", None, None);
+    }
     let next_id = view.id;
     let state = AppState {
         config: Mutex::new(config),
@@ -1629,6 +1688,22 @@ pub fn run() {
     };
     let result = tauri::Builder::default()
         .manage(state)
+        .setup(move |app| {
+            if let Some(run_id) = pending_resume {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    if handle.state::<AppState>().fail_resume_setup(
+                        run_id,
+                        "startup_timeout",
+                        crate::recovery::RESUME_UI_TIMEOUT,
+                    ) {
+                        return_control(&handle).await;
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             ui_heartbeat,
@@ -1674,7 +1749,7 @@ pub fn run() {
                 }
             }
         })
-        .run(app_context());
+        .run(app_context(pending_resume.is_some()));
     if let Err(error) = result {
         let message = platform::wide(&format!(
             "klickwerk could not open.\n\n{error}\n\nIf WebView2 is missing, install the Microsoft Edge WebView2 Runtime and try again."
@@ -1696,7 +1771,7 @@ mod release_tests {
 
     #[test]
     fn production_frontend_is_embedded_and_has_no_dev_server() {
-        let context = app_context();
+        let context = app_context(false);
         assert!(!tauri::is_dev(), "The release must use the asset protocol.");
         assert!(context.config().build.dev_url.is_none());
         let assets = context.assets();

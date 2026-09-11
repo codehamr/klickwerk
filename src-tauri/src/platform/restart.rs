@@ -97,7 +97,11 @@ pub fn launch(
         info.lpFile = file.as_ptr();
         info.lpParameters = parameters.as_ptr();
         info.lpDirectory = directory.as_ptr();
-        info.nShow = SW_SHOWNORMAL;
+        info.nShow = if session.resume_after_approval {
+            SW_HIDE
+        } else {
+            SW_SHOWNORMAL
+        };
         let ok = ShellExecuteExW(&mut info);
         let error = GetLastError();
         if initialized {

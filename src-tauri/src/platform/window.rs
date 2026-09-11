@@ -172,6 +172,25 @@ pub fn release_handoff_topmost(handle: usize) {
     }
 }
 
+// A hidden restart window must remain hidden: minimizing it can make it visible.
+// Call on the UI thread before the controller's first observation.
+pub fn minimize_for_control(handle: usize) -> Result<(), String> {
+    unsafe {
+        let window = handle as HWND;
+        if IsWindow(window) == 0 {
+            return Err("The main window is unavailable.".into());
+        }
+        release_handoff_topmost(handle);
+        if IsWindowVisible(window) != 0 && IsIconic(window) == 0 {
+            ShowWindow(window, SW_MINIMIZE);
+        }
+        if IsWindowVisible(window) != 0 && IsIconic(window) == 0 {
+            return Err("The main window could not be minimized.".into());
+        }
+        Ok(())
+    }
+}
+
 // Called on the window's UI thread, after the broker has released all input.
 // Every input-queue attachment is detached; no synthetic keys are needed.
 pub fn handoff(handle: usize) -> Handoff {

@@ -1,6 +1,39 @@
 # Validation status — 2026-09-11
 
-## Current injected keyboard follow-up
+## Current quiet recovery follow-up
+
+Revision `2026-09-quiet-recovery-v8` fixes the intermediate window appearance in
+the latest successful Task Manager run. The old instance raised its window before
+deciding to restart automatically, and the elevated replacement then started with
+a visible, focused main window. Automatic recovery now skips terminal presentation
+and starts the replacement hidden and unfocused. Final outcomes still restore the
+app in front. See the [export diagnosis](session-export.md#quiet-administrator-recovery).
+
+Hidden and already minimized windows are left alone when control starts. Terminal
+state is published before presentation, the activity gate stays reserved through
+foreground retries, and timed-out window callbacks are discarded. No repeated
+taskbar attention is requested. A startup failure or 15-second UI-readiness timeout
+cancels automatic continuation and brings the paused/error state into view.
+The new timeout message has English and German UI text.
+
+Validation: 52 portable Rust tests, 38 Chromium tests, TypeScript/ESLint and
+Windows-target Clippy with warnings denied pass. Wine/Xvfb passes 70 checks:
+9 startup/recovery checks, 22 input-monitor checks, 23 disposable editor/handoff
+checks, 11 shortcut checks and 5 restart transport checks. These cover hidden
+startup configuration, stale/duplicate timeout rejection, the failed setup path,
+preserved target focus while preparing a hidden window, and terminal restoration
+of that window. Windows UAC and WebView2 startup with competing application focus
+still need target-PC acceptance; the native fixture does not run a real WebView.
+
+The Windows x64 release is `build/klickwerk-v8.exe`; `build/klickwerk.exe` was also
+updated to the same build. The standard build encountered EACCES while removing
+the already empty `dist/assets` directory. Rebuilding the frontend with Vite's
+`emptyOutDir: false` reused that directory, then the normal production Rust build
+completed with the new frontend embedded. Artifact identity, validation results
+and the feedback export hash are recorded in
+`build/validation/quiet-recovery-release.json` with adjacent test/build logs.
+
+## Earlier injected keyboard follow-up
 
 Revision `2026-09-injected-keyboard-v7` fixes the newly identified takeover trigger:
 an untagged `WM_KEYDOWN` with `LLKHF_INJECTED` arrived in the same millisecond as

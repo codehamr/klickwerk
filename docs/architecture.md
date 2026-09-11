@@ -127,12 +127,15 @@ current screenshot, and relocate targets. Previous raw histories are never repla
 
 One decision is requested per observation. Questions and completion end desktop
 control before accepting further input. After broker teardown releases held input,
-the main window is restored, raised and activated on its UI thread. A temporary
-z-order change restores the previous topmost flag immediately. If needed, the
+the controller decides whether the task will resume automatically. Only a terminal
+outcome restores, raises and activates the main window on its UI thread. Temporary
+topmost state remains until the user leaves the app or starts again. If needed, the
 responsive foreground thread's input queue is attached for activation and detached
 before returning. No synthetic Alt keys or global foreground policy changes are
-used. Every attempt records actual foreground, visibility and keyboard focus;
-taskbar attention remains a fallback when Windows refuses activation. See
+used. A terminal handoff records actual foreground, visibility and keyboard focus.
+Its visible topmost fallback does not request repeated taskbar flashing. The activity
+gate stays reserved until presentation finishes, and timed-out UI callbacks are
+discarded so old window commands cannot affect a later run. See
 [Windows foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
 and [AttachThreadInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-attachthreadinput).
 
@@ -249,10 +252,23 @@ session capacity or any earlier elevation request prevents an automatic request.
 The native coordinator reserves the activity gate and invokes the current executable
 via [ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
 with `runas`. The user handles the normal Windows UAC prompt. The model has no
-elevation action. Failed foreground handoff does not prevent this native request.
+elevation action. Automatic recovery keeps the original window minimized and skips
+foreground handoff entirely. It is still part of the running task, not a request
+for the user to interact with the app. The replacement process starts with `SW_HIDE`
+and its Tauri main window is created with visibility and initial focus disabled.
+The monitored countdown still runs after the restored UI becomes ready. Preparing
+control leaves hidden or already minimized windows alone instead of showing or
+minimizing them again. See [ShowWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow).
 A declined or failed request leaves the original session open and paused; it never
 loops through repeated consent prompts. The recovery card still allows an explicit
 manual retry after reviewing or refining the task.
+
+Ordinary startup and a manual administrator restart remain visible. Stop before
+automatic continuation, setup failure or a 15-second UI-readiness timeout presents
+the paused/error state and cancels the pending continuation. The timeout is inert
+once the task is active, cancelled or completed. Final success, a question, failure
+and physical takeover still restore the app in front. The recovery log records
+`background_resume_startup`; the intermediate attempt has no foreground handoff.
 
 An ephemeral loopback socket and a random 256-bit token transfer a size-bounded
 session in memory. Transfer protocol version 2 rejects older peers before receipt

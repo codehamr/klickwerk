@@ -86,6 +86,38 @@ integrity can resolve it. Approval restores and continues the task; rejection
 leaves it paused with manual recovery available. The model cannot operate UAC or
 request arbitrary elevated commands, and the app does not change Windows policy.
 
+## Quiet administrator recovery
+
+The export with `started_at: 1789122117214` (revision
+`2026-09-injected-keyboard-v7`) ends in `done` without interruption. It records
+literal `chr` input, a Memory-column click and the result Google Chrome (26),
+approximately 7.8 GB. The user also confirms that the task worked better.
+
+The first attempt ends at a Medium-to-High integrity block, approximately 11.7
+seconds into the task. Its handoff reports `visible: true`, `minimized: false`,
+`topmost_retained: true`, `focused: false` and attachment error 5. The target remains
+the reported native foreground, so the report establishes an app window raised over
+the task, not successful keyboard activation of that old instance. The controller
+then automatically restarts with administrator permission. The new instance's
+window previously used normal visible/focused startup and another visible countdown.
+This sequence explains the intermediate appearance reported by the user; the export
+is not a continuous trace of every activation during process startup.
+
+Revision `2026-09-quiet-recovery-v8` decides on automatic recovery before presenting
+the app. It skips that intermediate handoff and creates the replacement window
+hidden and unfocused. Its monitored countdown and subsequent control run in the
+background. Failed or cancelled recovery, failed UI setup and the final task outcome
+still bring the app back. A 15-second readiness timeout prevents a background startup
+from remaining invisible indefinitely. The activity gate stays reserved through
+terminal activation retries; callbacks whose receivers timed out are discarded.
+
+New exports identify `background_resume_startup`. An intermediate recovery attempt
+has `handoff: null` until control actually returns to the user. The historical
+`before_handoff` image label still identifies the terminal capture for that attempt.
+Final handoff
+still records visibility, focus and temporary topmost state. No interruption policy,
+administrator permission check or input lease is relaxed by this change.
+
 ## Injected keyboard regression
 
 The next export (`started_at: 1789115766569`, revision `2026-09-input-handoff-v6`)

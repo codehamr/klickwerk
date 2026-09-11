@@ -149,15 +149,23 @@ unchanged. Its transport simulation does not request UAC or operate the target a
   foreground metadata, search result, sort indicator and image/desktop mapping.
 - Test a target at higher integrity than klickwerk: no blocked input may be sent.
   For a confirmed Medium-to-High conflict, the controller must request ordinary
-  Windows UAC once after stopping the broker, even when handoff focus is denied.
+  Windows UAC once after stopping the broker, without first restoring klickwerk.
   Unknown permissions and System-integrity targets must remain paused. An equally
   elevated sender and fixture target remain eligible; own windows remain rejected.
 - Start the Task Manager task from a normally launched klickwerk. Approve UAC:
-  one restored app opens, keeps the original task/steps/attempts/images, then
-  starts a new countdown automatically when its UI is ready. No manual recovery
+  the replacement app stays hidden, keeps the original task/steps/attempts/images,
+  then starts its monitored countdown in the background when its UI is ready.
+  Neither instance should raise its main window or flash the taskbar during this
+  transition. The Windows consent dialog itself remains unchanged. No manual recovery
   button or Continue should be needed on this first recovery. Verify a NEW desktop
   capture, focus of the search field, literal `chr`, descending Memory order and
   the reported top row/value. Verify physical takeover after automatic resumption.
+- Delay the restored UI beyond 15 seconds or make its setup fail. The app must
+  become visible with the task paused, with no late automatic continuation. Then
+  start or continue explicitly and confirm the old timeout cannot raise the app
+  over that run. Verify a hidden window is shown on success, Stop and failure.
+- Start another task immediately after terminal handoff. Pending activation retries
+  or UI callbacks from the old run must not bring the window back over the new one.
 - Repeat and cancel UAC: the original session and evidence must remain, with no
   automatic repeat prompt. Test Stop before launch, during transfer and while the
   restored UI is getting ready. No automatic input may follow a cancelled startup.
@@ -166,7 +174,9 @@ unchanged. Its transport simulation does not request UAC or operate the target a
   commands, stale run IDs, denied launches and missing WebView/configuration.
 - Export after cancellation, restoration/Stop and continuation. Inspect
   `recovery_events` for both integrity levels, request source, Windows error 1223,
-  transfer failure stage, restoration, parent exit and `automatic_resume_started`.
+  transfer failure stage, restoration, parent exit, `background_resume_startup`
+  and `automatic_resume_started`. An intermediate automatic recovery attempt must
+  have no `handoff`; a final return to the user must record the actual handoff.
   Earlier attempt outcomes and evidence must remain. A failed transfer keeps the
   original app open. Test actual UAC on Windows 11; Wine does not validate consent UI.
 - Test a slow administrator restart with a large screenshot history. A delayed

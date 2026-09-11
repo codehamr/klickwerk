@@ -367,6 +367,90 @@ async fn suite() -> Result<(), String> {
     Ok(())
 }
 
+fn quiet_resume_checks() -> Result<(), String> {
+    for background in [false, true] {
+        let context = app_context(background);
+        let window = context
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == "main")
+            .unwrap();
+        check(
+            window.visible == !background && window.focus == !background,
+            if background {
+                "automatic restart creates its window hidden and unfocused"
+            } else {
+                "ordinary startup and manual recovery keep the main window visible"
+            },
+        )?;
+    }
+    let state = AppState {
+        config: Mutex::new(ConfigStore {
+            path: Default::default(),
+            settings: Settings::default(),
+            error: None,
+        }),
+        view: Mutex::new(RunView {
+            id: 73,
+            phase: "recovering".into(),
+            task: "Continue the original task".into(),
+            ..RunView::default()
+        }),
+        active: Mutex::new(None),
+        ui_at: AtomicU64::new(0),
+        next_id: AtomicU64::new(73),
+        requests: Mutex::new(HashMap::new()),
+        speech: Mutex::new(None),
+        session: Mutex::new(Session::default()),
+        restored_refinement: Mutex::new(String::new()),
+        pending_resume: Mutex::new(Some(73)),
+        workflows: Mutex::new(WorkflowStore {
+            path: Default::default(),
+            workflows: vec![],
+            error: None,
+        }),
+        drafts: Mutex::new(HashMap::new()),
+    };
+    check(
+        !state.fail_resume_setup(72, "startup_timeout", "Fixture startup timeout")
+            && *state.pending_resume.lock().unwrap() == Some(73),
+        "an old startup timeout cannot affect another run",
+    )?;
+    check(
+        state.fail_resume_setup(73, "startup_timeout", crate::recovery::RESUME_UI_TIMEOUT)
+            && state.pending_resume.lock().unwrap().is_none()
+            && state.active.lock().unwrap().is_some()
+            && state.view.lock().unwrap().phase == "error",
+        "background startup timeout cancels continuation and reserves the terminal handoff",
+    )?;
+    check(
+        !state.fail_resume_setup(73, "ui_ready", "Late callback"),
+        "duplicate startup failures cannot schedule another handoff",
+    )?;
+    *state.active.lock().unwrap() = None;
+    state.view.lock().unwrap().phase = "recovering".into();
+    check(
+        state.fail_resume_setup(73, "ui_ready", "Invalid fixture settings"),
+        "setup errors return control even after the one-use continuation was consumed",
+    )?;
+    *state.active.lock().unwrap() = None;
+    for phase in ["running", "stopped", "done"] {
+        state.view.lock().unwrap().phase = phase.into();
+        if phase == "running" {
+            *state.active.lock().unwrap() = Some(Arc::new(AtomicBool::new(false)));
+        }
+        check(
+            !state.fail_resume_setup(73, "startup_timeout", "Late callback")
+                && state.view.lock().unwrap().phase == phase,
+            "late startup timeout leaves active, cancelled and completed tasks unchanged",
+        )?;
+        *state.active.lock().unwrap() = None;
+    }
+    Ok(())
+}
+
 pub fn run() -> i32 {
     crate::recovery::fixture::checks();
     unsafe {
@@ -379,6 +463,7 @@ pub fn run() -> i32 {
         .build()
         .unwrap();
     let result = runtime.block_on(async {
+        quiet_resume_checks()?;
         suite().await?;
         if std::env::args().any(|arg| arg == "--with-disposable-input") {
             input_suite().await?;
@@ -687,6 +772,18 @@ async fn input_suite() -> Result<(), String> {
         unsafe {
             let own = CreateWindowExW(0, platform::wide("STATIC").as_ptr(), platform::wide("Disposable handoff fixture").as_ptr(), WS_OVERLAPPEDWINDOW, 150, 200, 400, 250, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null());
             if own.is_null() { return Err("Could not create the handoff fixture.".into()); }
+            SetForegroundWindow(window);
+            platform::window::minimize_for_control(own as usize)?;
+            platform::window::minimize_for_control(own as usize)?;
+            check(IsWindowVisible(own) == 0 && IsIconic(own) == 0 && GetForegroundWindow() == window,
+                "preparing a background restart keeps its window hidden and the target focused")?;
+            let background_handoff = platform::window::handoff(own as usize);
+            check(background_handoff.visible && background_handoff.focused,
+                "terminal handoff restores a hidden background restart window")?;
+            platform::window::minimize_for_control(own as usize)?;
+            platform::window::minimize_for_control(own as usize)?;
+            check(IsIconic(own) != 0 && GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0,
+                "starting control minimizes a visible window once and clears temporary topmost state")?;
             ShowWindow(own, SW_MINIMIZE);
             SetForegroundWindow(window);
             let report = platform::window::handoff(own as usize);
@@ -786,7 +883,7 @@ async fn input_suite() -> Result<(), String> {
         check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{interruption:Some(event),..} if event.flags == 0),"hardware keyboard flags interrupt a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
         check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
-        println!("Disposable input fixture: 20 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
+        println!("Disposable input fixture: 23 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();
     let _ = editor.wait();

@@ -20,6 +20,7 @@ pub mod fixture;
 
 pub const RESTART_READY: &str = "klickwerk restarted as administrator. Click Continue to inspect the current desktop and resume your task.";
 pub const RESTART_FAILED: &str = "The administrator restart failed. Your session is still open. You can retry or export its history.";
+pub const RESUME_UI_TIMEOUT: &str = "The interface did not become ready after the restart. Your task is paused. Continue when ready.";
 pub const RESTART_CANCELLED: &str =
     "The administrator restart was cancelled. Your session is still open.";
 pub const WAITING_FOR_PERMISSION: &str = "Windows permission is needed to control this app. Approve the Windows prompt to continue the task.";

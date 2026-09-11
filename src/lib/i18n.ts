@@ -38,6 +38,8 @@ const de: Record<string, string> = {
     "klickwerk wurde als Administrator neu gestartet. Klicke auf Weiter, um den aktuellen Desktop zu prüfen und die Aufgabe fortzusetzen.",
   "The administrator restart failed. Your session is still open. You can retry or export its history.":
     "Der Administrator-Neustart ist fehlgeschlagen. Deine Sitzung ist weiterhin geöffnet. Du kannst es erneut versuchen oder den Verlauf exportieren.",
+  "The interface did not become ready after the restart. Your task is paused. Continue when ready.":
+    "Die Oberfläche wurde nach dem Neustart nicht rechtzeitig bereit. Deine Aufgabe ist pausiert. Setze sie fort, sobald du bereit bist.",
   "The administrator restart was cancelled. Your session is still open.":
     "Der Administrator-Neustart wurde abgebrochen. Deine Sitzung ist weiterhin geöffnet.",
   "This session is not available for an administrator restart.":
