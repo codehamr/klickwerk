@@ -413,6 +413,8 @@ fn quiet_resume_checks() -> Result<(), String> {
             error: None,
         }),
         drafts: Mutex::new(HashMap::new()),
+        update: Mutex::new(crate::update::Status::new(false)),
+        update_cancel: Mutex::new(None),
     };
     check(
         !state.fail_resume_setup(72, "startup_timeout", "Fixture startup timeout")

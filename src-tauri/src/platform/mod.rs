@@ -5,6 +5,7 @@ pub mod focus;
 pub mod input;
 pub mod restart;
 pub mod speech;
+pub mod update;
 pub mod window;
 
 use windows_sys::Win32::{

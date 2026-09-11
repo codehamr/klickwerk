@@ -34,6 +34,7 @@ import { SettingsDialog } from "./components/settings";
 import { Timeline } from "./components/timeline";
 import { WorkflowDialog, type WorkflowSource } from "./components/workflow";
 import { TrainingDialog } from "./components/training";
+import { UpdateScreen, UpdateNotice, UpdateCheck } from "./components/update";
 import { taskSuggestions } from "./lib/suggestions";
 
 export function App() {
@@ -443,6 +444,9 @@ export function App() {
       </div>
     );
 
+  if (snapshot.update?.startup)
+    return <UpdateScreen update={snapshot.update} />;
+
   return (
     <TooltipProvider>
       <div className="app-shell">
@@ -499,6 +503,7 @@ export function App() {
             </Tooltip>
           </div>
         </header>
+        <UpdateNotice update={snapshot.update} />
         <main className={`main-content${current ? " has-run" : ""}`}>
           <section className="welcome" aria-labelledby="welcome-title">
             <div className="eyebrow">
@@ -1113,6 +1118,7 @@ export function App() {
           )}
         </main>
         <footer className="app-footer">
+          <UpdateCheck update={snapshot.update} />
           <span className="footer-note">
             <span className="status-dot configured" />
             {t("Your pace. Your control.")}

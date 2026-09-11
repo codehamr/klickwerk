@@ -12,6 +12,7 @@ config.invalid-*.cfg
 .config-*.tmp
 workflows.json
 .workflows-*.tmp
+.klickwerk-update-*/
 *.exe
 *.o
 *.obj

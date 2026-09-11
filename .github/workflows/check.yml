@@ -1,8 +1,32 @@
-name: Check and build
-on: [push, pull_request, workflow_dispatch]
+name: Check, build and release
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        name: Choose a unique UTC release tag
+        env:
+          RELEASE: ${{ github.repository == 'codehamr/klickwerk' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          const now = new Date().toISOString();
+          const tag = process.env.RELEASE === 'true'
+            ? `${now.slice(0, 10)}-${now.slice(11, 19).replaceAll(':', '')}-${process.env.GITHUB_RUN_NUMBER}-${process.env.GITHUB_RUN_ATTEMPT}` : '';
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+          JS
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -13,6 +37,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: node --test scripts/release.test.mjs
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm test
@@ -22,7 +47,10 @@ jobs:
           name: ui-test-results
           path: test-results
   windows:
+    needs: metadata
     runs-on: windows-latest
+    env:
+      KLICKWERK_RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,12 +59,46 @@ jobs:
           cache: npm
       - name: Install Rust
         run: rustup show
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-rust-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock') }}
       - run: npm ci
       - run: npm run test:core
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --features safety-tests -- -D warnings
       - run: npm run desktop:build
       - name: Verify embedded production frontend and Windows core
         run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol --lib
+      - name: Prepare public update manifest
+        if: needs.metadata.outputs.tag != ''
+        run: node scripts/release.mjs prepare
       - uses: actions/upload-artifact@v4
         with:
           name: klickwerk-windows-x64
-          path: build/klickwerk.exe
+          path: |
+            build/klickwerk.exe
+            build/klickwerk-update.json
+          if-no-files-found: error
+  release:
+    needs: [metadata, frontend, windows]
+    if: needs.metadata.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: klickwerk-windows-x64
+          path: build
+      - name: Publish only after both assets have been verified
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KLICKWERK_RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: node scripts/release.mjs publish

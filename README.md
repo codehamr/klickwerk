@@ -1,5 +1,9 @@
 # klickwerk
 
+[Download for Windows](https://github.com/codehamr/klickwerk/releases/latest/download/klickwerk.exe) ·
+[Releases](https://github.com/codehamr/klickwerk/releases) ·
+[Build status](https://github.com/codehamr/klickwerk/actions/workflows/check.yml)
+
 A small Windows desktop assistant with a React interface and a native Rust core.
 Describe a task, press **Let's do it**, and let klickwerk handle one desktop action
 at a time. Move your mouse or press any key to take over. Refine a task as you go,
@@ -12,7 +16,10 @@ tools; users do not install them.
 
 ## Run on Windows 11
 
-1. Put `build/klickwerk.exe` in a writable folder and open it.
+1. Download `klickwerk.exe` from the latest release, put it in a writable folder
+   and open it. At every start it checks the public GitHub release and updates
+   itself with visible progress. **Skip this time** opens the existing version.
+   Settings, workflows, the filename and the folder stay in place.
 2. The app creates `config.cfg` **beside that EXE** on first launch and reads it on
    subsequent launches. Settings saves changes back to that exact file.
 3. Open **Settings**, enter a **Server URL**, add an optional **API key**, then select a vision model. The same
@@ -52,6 +59,12 @@ tools; users do not install them.
 The Windows WebView2 Runtime is required and normally ships with Windows 11. The
 EXE is not an installer and does not silently download a runtime. Move the app out
 of `Program Files` or another read-only folder if settings cannot be saved.
+
+Offline or failed updates leave the app usable. Checks during an existing task
+report availability for the next start. See [public releases and portable
+updates](docs/updates.md) for the release format, verification and recovery behavior.
+Every successful CI run on `main` publishes the tested EXE with a unique UTC date
+and time tag; download links always point to the latest completed release.
 
 When a target such as Task Manager runs as administrator, Windows can block input
 from a normally launched klickwerk. For a confirmed, recoverable permission block,

@@ -13,6 +13,38 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  "Getting klickwerk ready": "klickwerk macht sich bereit",
+  "Restarting with your update…": "Neustart mit deinem Update…",
+  "Downloading the latest version…": "Die neueste Version wird geladen…",
+  "Checking for updates…": "Suche nach Updates…",
+  "Update download": "Update-Download",
+  "Just a moment. klickwerk will reopen automatically.":
+    "Einen Moment. klickwerk öffnet sich gleich wieder automatisch.",
+  "A quick check on GitHub at every start. Your settings and workflows stay with you.":
+    "Bei jedem Start kurz auf GitHub nachsehen. Deine Einstellungen und Workflows bleiben erhalten.",
+  "Skip this time": "Diesmal überspringen",
+  "An update is available. It will install the next time you open klickwerk.":
+    "Ein Update ist verfügbar. Es wird beim nächsten Öffnen von klickwerk installiert.",
+  "klickwerk is updated. You’re ready to go.":
+    "klickwerk ist aktualisiert. Du kannst loslegen.",
+  "Up to date": "Auf dem neuesten Stand",
+  "Update on next start": "Update beim nächsten Start",
+  "Update skipped": "Update übersprungen",
+  "Check for updates": "Nach Updates suchen",
+  "We’ll check again next time you open klickwerk.":
+    "Beim nächsten Öffnen von klickwerk suchen wir erneut.",
+  "Updates could not be checked. You can keep working and try again later.":
+    "Updates konnten nicht geprüft werden. Du kannst weiterarbeiten und es später erneut versuchen.",
+  "The update could not be verified. Try again on the next start.":
+    "Das Update konnte nicht überprüft werden. Beim nächsten Start versuchen wir es erneut.",
+  "The update could not be installed. Close other copies of klickwerk and use a writable folder, then try again on the next start.":
+    "Das Update konnte nicht installiert werden. Schließe weitere geöffnete Kopien von klickwerk und verwende einen beschreibbaren Ordner. Versuche es dann beim nächsten Start erneut.",
+  "The update is restarting klickwerk.":
+    "Das Update startet klickwerk gerade neu.",
+  "An update check is already running.":
+    "Es wird bereits nach Updates gesucht.",
+  "Finish the current task before updating.":
+    "Beende die aktuelle Aufgabe vor dem Update.",
   "Show me how": "Vormachen",
   "Show me how.": "Zeig mir, wie es geht.",
   "Do the task once. Turn your example into a reusable workflow.":

@@ -44,6 +44,7 @@ pub struct Snapshot {
     can_restart_elevated: bool,
     restored_refinement: String,
     pending_resume_run_id: Option<u64>,
+    update: crate::update::Status,
 }
 
 pub struct AppState {
@@ -60,6 +61,8 @@ pub struct AppState {
     pending_resume: Mutex<Option<u64>>,
     workflows: Mutex<WorkflowStore>,
     drafts: Mutex<HashMap<String, PreparedWorkflow>>,
+    update: Mutex<crate::update::Status>,
+    update_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 impl AppState {
     fn fail_resume_setup(&self, run_id: u64, source: &str, message: &str) -> bool {
@@ -127,6 +130,7 @@ impl AppState {
             },
             workflows,
             workflow_error,
+            update: self.update.lock().unwrap().clone(),
         }
     }
     fn draft(&self, mut settings: Settings, key: Option<String>) -> Result<Settings, String> {
@@ -163,6 +167,155 @@ fn bootstrap(state: tauri::State<AppState>) -> Snapshot {
 #[tauri::command]
 fn ui_heartbeat(state: tauri::State<AppState>) {
     state.ui_at.store(platform::now(), Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn skip_update(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    // This lock also protects the final file replacement: skip can never race a restart.
+    let mut active = state.active.lock().unwrap();
+    let mut update = state.update.lock().unwrap();
+    if update.phase == "installing" {
+        return Err("The update is restarting klickwerk.".into());
+    }
+    if let Some(cancel) = state.update_cancel.lock().unwrap().as_ref() {
+        cancel.store(true, Ordering::SeqCst);
+        if active
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, cancel))
+        {
+            *active = None;
+        }
+    }
+    update.phase = "skipped";
+    update.startup = false;
+    update.message = None;
+    drop(update);
+    drop(active);
+    emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn check_updates(app: tauri::AppHandle) -> Result<(), String> {
+    begin_update(&app, false, false)
+}
+
+fn begin_update(app: &tauri::AppHandle, install: bool, updated: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut active = state.active.lock().unwrap();
+    let mut status = state.update.lock().unwrap();
+    let mut job = state.update_cancel.lock().unwrap();
+    if job.is_some() {
+        return Err("An update check is already running.".into());
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    if install {
+        if active.is_some()
+            || state.speech.lock().unwrap().is_some()
+            || state.view.lock().unwrap().phase != "idle"
+        {
+            return Err("Finish the current task before updating.".into());
+        }
+        *active = Some(cancel.clone());
+    }
+    *status = crate::update::Status::new(install);
+    *job = Some(cancel.clone());
+    drop(job);
+    drop(status);
+    drop(active);
+    emit(app);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = tokio::select! {
+            biased;
+            _ = crate::update::wait_cancel(&cancel) => Err(crate::update::CANCELLED.into()),
+            result = perform_update(&app, &cancel, install, updated) => result,
+        };
+        let state = app.state::<AppState>();
+        let mut active = state.active.lock().unwrap();
+        let mut status = state.update.lock().unwrap();
+        if let Err(error) = result
+            && !cancel.load(Ordering::SeqCst)
+        {
+            status.phase = "error";
+            status.message = Some(error);
+        }
+        status.startup = false;
+        if active
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, &cancel))
+        {
+            *active = None;
+        }
+        state.update_cancel.lock().unwrap().take();
+        drop(status);
+        drop(active);
+        emit(&app);
+    });
+    Ok(())
+}
+
+async fn perform_update(
+    app: &tauri::AppHandle,
+    cancel: &Arc<AtomicBool>,
+    install: bool,
+    updated: bool,
+) -> Result<(), String> {
+    use crate::update;
+    let client = update::client()?;
+    let manifest = update::check(&client, cancel).await?;
+    let current = std::env::current_exe().map_err(|_| update::CHECK_FAILED)?;
+    let hash = update::file_hash(&current, cancel)?;
+    let state = app.state::<AppState>();
+    {
+        let mut status = state.update.lock().unwrap();
+        if cancel.load(Ordering::SeqCst) {
+            return Err(update::CANCELLED.into());
+        }
+        status.latest = Some(manifest.tag.clone());
+        status.total = manifest.size;
+        if !manifest.newer_than(update::RELEASE_TAG, &hash) {
+            status.phase = if updated { "updated" } else { "current" };
+            return Ok(());
+        }
+        status.phase = if install { "downloading" } else { "available" };
+    }
+    emit(app);
+    if !install {
+        return Ok(());
+    }
+    let last_progress = Mutex::new(Instant::now() - Duration::from_secs(1));
+    let staged = update::download(&client, &manifest, &current, cancel, |bytes| {
+        let mut last = last_progress.lock().unwrap();
+        if last.elapsed() < Duration::from_millis(100) && bytes < manifest.size {
+            return;
+        }
+        *last = Instant::now();
+        let mut status = state.update.lock().unwrap();
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        status.downloaded = bytes;
+        drop(status);
+        emit(app);
+    })
+    .await?;
+    // A skipped update immediately releases the composer. Never restart after that point.
+    let active = state.active.lock().unwrap();
+    if cancel.load(Ordering::SeqCst)
+        || !active
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, cancel))
+    {
+        return Err(update::CANCELLED.into());
+    }
+    state.update.lock().unwrap().phase = "installing";
+    // The installing phase now rejects skip; release the lock before snapshot emission.
+    drop(active);
+    emit(app);
+    update::install(&current, staged, platform::update::launch)?;
+    app.exit(0);
+    Ok(())
 }
 #[tauri::command]
 fn save_settings(
@@ -1862,8 +2015,10 @@ fn app_context(background_resume: bool) -> tauri::Context<tauri::Wry> {
 }
 
 pub fn run() {
-    let restored = match platform::restart::receive_if_requested() {
-        Ok(restored) => restored,
+    let (updated_token, restored) = match platform::update::receive_if_requested()
+        .and_then(|token| platform::restart::receive_if_requested().map(|session| (token, session)))
+    {
+        Ok(value) => value,
         Err(error) => {
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
@@ -1896,6 +2051,8 @@ pub fn run() {
     let _mutex = platform::Handle(mutex);
     let config = ConfigStore::beside_executable();
     let workflows = WorkflowStore::load(config.path.with_file_name("workflows.json"));
+    // Recovery preserves a live session. Update handoffs check again without a restart loop.
+    let install_update = restored.is_none() && updated_token.is_none();
     let (mut view, memory, refinement, pending_resume) = restored.map_or_else(
         || (RunView::default(), String::new(), String::new(), None),
         |session| {
@@ -1921,10 +2078,16 @@ pub fn run() {
         pending_resume: Mutex::new(pending_resume),
         workflows: Mutex::new(workflows),
         drafts: Mutex::new(HashMap::new()),
+        update: Mutex::new(crate::update::Status::new(install_update)),
+        update_cancel: Mutex::new(None),
     };
     let result = tauri::Builder::default()
         .manage(state)
         .setup(move |app| {
+            if let (Some(token), Ok(executable)) = (&updated_token, std::env::current_exe()) {
+                crate::update::cleanup(&executable, token);
+            }
+            let _ = begin_update(app.handle(), install_update, updated_token.is_some());
             if let Some(run_id) = pending_resume {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1942,6 +2105,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            skip_update,
+            check_updates,
             ui_heartbeat,
             save_settings,
             list_models,
@@ -1985,6 +2150,9 @@ pub fn run() {
                     cancel.store(true, Ordering::SeqCst);
                 }
                 if let Some(cancel) = state.speech.lock().unwrap().as_ref() {
+                    cancel.store(true, Ordering::SeqCst);
+                }
+                if let Some(cancel) = state.update_cancel.lock().unwrap().as_ref() {
                     cancel.store(true, Ordering::SeqCst);
                 }
             }

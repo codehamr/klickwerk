@@ -34,6 +34,8 @@ export async function subscribe<T>(
 
 export const api = {
   bootstrap: () => call<Snapshot>("bootstrap"),
+  skipUpdate: () => call<void>("skip_update"),
+  checkUpdates: () => call<void>("check_updates"),
   save: (settings: Settings, key: string | null) =>
     call<Snapshot>("save_settings", { settings, key }),
   models: (settings: Settings, key: string | null, requestId: string) =>

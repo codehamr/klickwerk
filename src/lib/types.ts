@@ -241,7 +241,25 @@ export interface SessionExport {
     clock: string;
   };
 }
+export interface UpdateStatus {
+  phase:
+    | "checking"
+    | "downloading"
+    | "installing"
+    | "current"
+    | "updated"
+    | "available"
+    | "skipped"
+    | "error";
+  current: string;
+  latest: string | null;
+  downloaded: number;
+  total: number;
+  startup: boolean;
+  message: string | null;
+}
 export interface Snapshot {
+  update?: UpdateStatus;
   settings: Settings;
   has_api_key: boolean;
   config_path: string;

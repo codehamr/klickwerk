@@ -47,6 +47,47 @@ let state: Snapshot = {
   workflows: [],
   workflow_error: null,
 };
+const updateScenario = new URLSearchParams(location.search).get("update");
+if (updateScenario) {
+  state.update = {
+    phase:
+      updateScenario === "success" || updateScenario === "checking"
+        ? "checking"
+        : updateScenario === "downloading"
+          ? "downloading"
+          : updateScenario === "installing"
+            ? "installing"
+            : updateScenario === "error"
+              ? "error"
+              : updateScenario === "updated"
+                ? "updated"
+                : "available",
+    current: "2026-09-10-120000-1-1",
+    latest: "2026-09-11-120000-2-1",
+    downloaded: 3 * 1024 * 1024,
+    total: 6 * 1024 * 1024,
+    startup: ["checking", "downloading", "installing", "success"].includes(
+      updateScenario,
+    ),
+    message:
+      updateScenario === "error"
+        ? "Updates could not be checked. You can keep working and try again later."
+        : null,
+  };
+  if (updateScenario === "success") {
+    setTimeout(() => {
+      if (state.update?.phase !== "checking") return;
+      state.update.phase = "downloading";
+      emit();
+      setTimeout(() => {
+        if (state.update?.phase !== "downloading") return;
+        state.update.phase = "updated";
+        state.update.startup = false;
+        emit();
+      }, 900);
+    }, 500);
+  }
+}
 const drafts = new Map<
   string,
   {
@@ -120,6 +161,28 @@ export async function previewCall<T>(
   args: Record<string, unknown>,
 ): Promise<T> {
   switch (command) {
+    case "skip_update":
+      if (state.update) {
+        if (state.update.phase === "installing")
+          throw new Error("The update is restarting klickwerk.");
+        state.update.phase = "skipped";
+        state.update.startup = false;
+        state.update.message = null;
+        emit();
+      }
+      return undefined as T;
+    case "check_updates":
+      if (state.update) {
+        state.update.phase = "checking";
+        emit();
+        setTimeout(() => {
+          if (state.update?.phase !== "checking") return;
+          state.update.phase = "available";
+          state.update.message = null;
+          emit();
+        }, 250);
+      }
+      return undefined as T;
     case "bootstrap":
       summaries();
       return structuredClone(state) as T;
