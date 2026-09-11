@@ -117,8 +117,8 @@ Every proposed action is recorded before execution, including exact text, key
 combinations, pointer coordinates, image dimensions, and timestamp. Its status
 becomes completed, skipped, failed, or interrupted. Completed means dispatch was
 acknowledged; the next screenshot verifies the result. A takeover records that the
-latest action may be mistaken or partial, without inventing a reason. Input is not
-recorded after takeover; the user supplies explicit refinements in the prompt.
+latest action may be mistaken or partial, without inventing a reason. Input is not recorded after takeover unless the user explicitly starts **Show me
+how**. Otherwise the user supplies refinements in the prompt.
 
 Each model request includes native foreground identity and input permissions, the saved start prompt, all current user corrections,
 and a bounded tail of actual actions. Corrections are retained separately so
@@ -139,9 +139,11 @@ discarded so old window commands cannot affect a later run. See
 [Windows foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
 and [AttachThreadInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-attachthreadinput).
 
-Every workflow save first sends a text-only finalization request to the selected
-model, including when editing a saved prompt or when no correction or success is
-available. It includes the outcome, a whole-session overview, detailed recent
+Saving an unrun prompt or an imported workflow uses a validated draft without a
+model request. Saving an executed session or editing an existing workflow sends a
+finalization request, including when no correction or success is available.
+Finishing an explicit demonstration prepares a draft for review without persisting
+it. Optional demonstration screenshots accompany that finalization request. It includes the outcome, a whole-session overview, detailed recent
 input, explicit corrections, prior instructions and user edits. Unchanged original
 task text must not override newer corrections. The model returns strict JSON with
 `name` and one self-contained `prompt`, covering useful preconditions, approaches,
@@ -154,13 +156,29 @@ separate states. A failed model request offers retry or an explicit fallback sav
 of the task, prior prompt and corrections, with no claim of successful learning.
 Closing during finalization cancels it and never persists a late result.
 
-`workflows.json` version 2 stores only ID, name, prompt and update time. Version 1
-memory is merged into its prompt on load and legacy histories are discarded on the
-next atomic library write. Current-session history remains in RAM until a fresh
-session replaces it, allowing further refinement after saving. The library supports
-100 workflows and 16 MiB total; prompts are bounded to 32 KiB. A damaged library is
-preserved and surfaced as an error. Recent screenshots are retained only in bounded
-session evidence for explicit JSON export; raw user keystrokes and audio are not recorded. Learning reuses instructions; it does not update model weights.
+`workflows/` beside the executable contains independently portable JSON files
+with `format`, `version`, `name` and `prompt`. The filename is the local identifier;
+updates preserve it. New names normalize short titles to lowercase hyphenated
+slugs, transliterate German umlauts, avoid Windows device names, and resolve
+collisions with numeric suffixes. Imports have strict version/field validation and
+64 KiB limits; they open as new drafts and never execute. Updates use atomic
+replacement, and new files publish without replacing existing destinations. Changed
+or damaged external files are preserved and reported. Legacy libraries migrate
+through a staging directory; a successful rename commits migration once, preserving
+the original library without resurrecting subsequently deleted entries.
+
+Explicit demonstration capture has its own read-only Windows hook thread and a
+bounded worker queue. It never starts the input broker. The same activity gate
+excludes execution, dictation, settings and library mutation. A floating panel and
+reserved global hotkeys expose pause/finish; teardown releases hooks and hotkeys.
+A missing UI heartbeat, desktop switch, capacity limit or explicit finish stops
+recording. The worker groups input and attaches window/focus context; only known
+native non-password EDIT/RichEdit controls permit literal text. Unknown fields,
+clipboard content and IME composition are not reconstructed. Optional screenshots
+are delayed crops, with the recording panel masked. The complete bounded event log
+and image evidence remain in `RunView.evidence.training`; UI snapshots carry counts
+only. They survive explicit session export and privilege-recovery memory transfer.
+New tasks discard them. See [training](training.md) for the schema and limits.
 
 ## Connections, settings, and speech
 
@@ -220,7 +238,7 @@ or written; the preference and motion overrides have been removed.
 Session export schema 3 preserves all recorded steps and attempts, including
 structured target refusals and handoff verification. A separate shared allocation
 holds the latest 12 observation/pre-handoff screenshots within 8 MiB of base64 data,
-plus 12 bounded assistant responses, with explicit omission counts. It is excluded from UI snapshots and workflow consolidation.
+plus 12 bounded assistant responses, with explicit omission counts. It is excluded from UI snapshots and ordinary workflow consolidation. Explicit demonstration images are held separately and included only in demonstration consolidation.
 Metadata includes physical/image geometry, model latency, validation/input timing,
 window/process identity, focused editable regions, integrity levels, sampling traces
 and repeat-guard outcomes. Frame IDs are independent of step IDs. The terminal

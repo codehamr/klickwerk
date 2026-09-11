@@ -13,6 +13,100 @@ const subscribe = (listener: () => void) => {
   };
 };
 const de: Record<string, string> = {
+  "Show me how": "Vormachen",
+  "Show me how.": "Zeig mir, wie es geht.",
+  "Do the task once. Turn your example into a reusable workflow.":
+    "Mach die Aufgabe einmal vor. Daraus entsteht dein wiederverwendbarer Workflow.",
+  "Start recording, then switch to the app you want to demonstrate.":
+    "Starte die Aufnahme und wechsle in die App, in der du die Aufgabe vormachen möchtest.",
+  "Work as usual. Clicks, scrolling and window focus are recorded.":
+    "Arbeite wie gewohnt. Klicks, Scrollen und Fensterwechsel werden aufgezeichnet.",
+  "Finish with Ctrl + Shift + F9. Review the improved prompt and save.":
+    "Beende mit Strg + Umschalt + F9. Prüfe den verbesserten Prompt und speichere ihn.",
+  "Include typed text": "Getippte Texte aufnehmen",
+  "Only recognized standard text fields. Password and unknown fields are omitted; clipboard content is never read.":
+    "Nur erkannte Standard-Textfelder. Passwortfelder und unbekannte Felder werden ausgelassen; die Zwischenablage wird nicht gelesen.",
+  "Include occasional screenshots": "Gelegentliche Screenshots aufnehmen",
+  "Up to 8 small images of the active window. Images may contain sensitive information.":
+    "Bis zu 8 kleine Bilder des aktiven Fensters. Bilder können sensible Informationen enthalten.",
+  "Pause with Ctrl + Shift + F8 before sensitive steps. Recording stays in memory until you finish; analysis sends it to your configured model. Only the reviewed prompt is saved in the workflow.":
+    "Pausiere vor sensiblen Schritten mit Strg + Umschalt + F8. Die Aufnahme bleibt zunächst im Arbeitsspeicher; nach dem Beenden wird sie zur Auswertung an dein eingestelltes Modell gesendet. Im Workflow wird nur der geprüfte Prompt gespeichert.",
+  "Browser preview: the demonstration is simulated. No desktop input is recorded.":
+    "Browser-Vorschau: Die Demonstration ist simuliert. Desktop-Eingaben werden nicht aufgezeichnet.",
+  "Start recording": "Aufnahme starten",
+  "Finish recording": "Aufnahme beenden",
+  "Recording paused": "Aufnahme pausiert",
+  "Recording your example": "Dein Beispiel wird aufgenommen",
+  "Pause recording": "Aufnahme pausieren",
+  "Resume recording": "Aufnahme fortsetzen",
+  "You’re in control. Demonstrate the task in your apps.":
+    "Du steuerst selbst. Mach die Aufgabe in deinen Apps vor.",
+  "{events} events · {images} screenshots":
+    "{events} Ereignisse · {images} Screenshots",
+  "Ctrl + Shift + F8 to pause · Ctrl + Shift + F9 to finish":
+    "Strg + Umschalt + F8: Pause · Strg + Umschalt + F9: Fertig",
+  "Recording is active only while you choose. Pause before sensitive steps.":
+    "Du bestimmst, was aufgenommen wird. Pausiere vor sensiblen Schritten.",
+  "Keep it for next time, or show me how first.":
+    "Für später speichern oder zuerst vormachen.",
+  "Show the task in your apps. Finish with Ctrl + Shift + F9.":
+    "Mach die Aufgabe in deinen Apps vor. Beende mit Strg + Umschalt + F9.",
+  "Demonstration recorded.": "Dein Beispiel wurde aufgenommen.",
+  "Save workflow": "Workflow speichern",
+  "Your example is now a reusable prompt. Adjust anything before saving.":
+    "Aus deinem Beispiel ist ein wiederverwendbarer Prompt entstanden. Passe ihn vor dem Speichern nach Wunsch an.",
+  "This is what the agent will use next time. Saving does not start the task.":
+    "Diesen Prompt verwendet der Agent beim nächsten Mal. Speichern startet die Aufgabe nicht.",
+  File: "Datei",
+  "Import workflow": "Workflow importieren",
+  "Export workflow": "Workflow exportieren",
+  "Choose workflow file": "Workflow-Datei auswählen",
+  "Workflow exported.": "Workflow exportiert.",
+  "Review this imported prompt before saving. It will be added as a separate workflow.":
+    "Prüfe den importierten Prompt vor dem Speichern. Er wird als eigener Workflow hinzugefügt.",
+  "“{name}” saved as a workflow.": "„{name}“ als Workflow gespeichert.",
+  "Workflow files must be smaller than 64 KiB.":
+    "Workflow-Dateien dürfen höchstens 64 KiB groß sein.",
+  "Choose a valid klickwerk workflow JSON file.":
+    "Wähle eine gültige klickwerk-Workflow-Datei im JSON-Format.",
+  "This workflow format is not supported.":
+    "Dieses Workflow-Format wird nicht unterstützt.",
+  "Use a name up to 200 bytes and a start prompt up to 32 KiB.":
+    "Verwende einen Namen mit höchstens 200 Bytes und einen Startprompt mit höchstens 32 KiB.",
+  "The workflow could not be encoded.":
+    "Der Workflow konnte nicht in JSON umgewandelt werden.",
+  "The workflow folder could not be created.":
+    "Der Workflow-Ordner konnte nicht erstellt werden.",
+  "The workflow folder must not be a symbolic link.":
+    "Der Workflow-Ordner darf keine symbolische Verknüpfung sein.",
+  "Workflow files must be regular JSON files.":
+    "Workflows müssen als normale JSON-Dateien vorliegen.",
+  "Workflows could not be saved.":
+    "Die Workflows konnten nicht gespeichert werden.",
+  "Workflows could not be saved. Check the folder permissions and filename.":
+    "Die Workflows konnten nicht gespeichert werden. Prüfe Ordnerberechtigungen und Dateinamen.",
+  "The workflow could not be deleted.":
+    "Der Workflow konnte nicht gelöscht werden.",
+  "Finish the current activity before exporting workflows.":
+    "Beende die aktuelle Aktivität, bevor du Workflows exportierst.",
+  "Finish the current activity before recording a demonstration.":
+    "Beende die aktuelle Aktivität, bevor du eine Demonstration aufnimmst.",
+  "No demonstration is being recorded.": "Es läuft gerade keine Aufnahme.",
+  "The demonstration recorder could not start.":
+    "Die Aufnahme konnte nicht gestartet werden. Prüfe, ob Strg + Umschalt + F8 oder F9 bereits belegt ist.",
+  "The demonstration recorder stopped unexpectedly.":
+    "Die Aufnahme wurde unerwartet beendet.",
+  "The 15-minute recording limit was reached.":
+    "Die maximale Aufnahmedauer von 15 Minuten wurde erreicht.",
+  "Recording stopped because the interface disconnected.":
+    "Die Aufnahme wurde beendet, weil die Verbindung zur Oberfläche unterbrochen wurde.",
+  "Recording stopped because the active desktop changed.":
+    "Die Aufnahme wurde beendet, weil der aktive Desktop gewechselt wurde.",
+  "The recording limit was reached. Review the partial demonstration.":
+    "Die Aufnahmegrenze wurde erreicht. Prüfe die unvollständige Demonstration.",
+  "Only the consolidated start prompt is saved. Action history stays in this session.":
+    "Nur der fertige Startprompt wird gespeichert. Verlauf und Aufnahmen bleiben in dieser Sitzung.",
+
   Stop: "Stoppen",
   "Waiting for Windows permission": "Warte auf Windows-Zustimmung",
   "Resuming your task": "Deine Aufgabe wird fortgesetzt",
@@ -266,8 +360,6 @@ const de: Record<string, string> = {
   "One start prompt. Everything useful from this session built in.":
     "Ein Startprompt. Alles Nützliche aus dieser Sitzung steckt darin.",
   "Only if your server requires one": "Nur wenn dein Server einen benötigt",
-  "Only the consolidated start prompt is saved. Action history stays in this session.":
-    "Nur der zusammengeführte Startprompt wird gespeichert. Der Aktionsverlauf bleibt in dieser Sitzung.",
   "Open settings": "Einstellungen öffnen",
   "Opening workflow…": "Workflow wird geöffnet…",
   "Or try something new": "Oder probiere etwas Neues",

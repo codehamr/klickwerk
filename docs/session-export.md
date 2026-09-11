@@ -21,6 +21,8 @@ session has no old action history to export.
 | `exported_at` | Unix timestamp in milliseconds |
 | `app` | Application name, version and `windows` or `preview` platform |
 | `run` | Original task, session ID, current outcome, message, question/result, duration, start time, workflow association, steps and attempts |
+| `run.training` | Optional demonstration counts, elapsed time and stop reason; no raw input or images |
+| `evidence.training` | Optional explicit demonstration: options, timestamped mouse/keyboard/focus events, bounded cropped screenshots and omission counts; see [training](training.md) |
 | `run.steps` | Every recorded step in order, with actor, description, action and its arguments, status, elapsed time, image dimensions and desktop coordinates |
 | `run.recovery` | Current structured privilege block, including sender/target integrity; cleared when continuing or after a successful administrator restart |
 | `run.attempts[].interruption` | Optional interruption event/flags/time, time since tagged agent input, pointer position and anchor; no keyboard codes or typed text |
@@ -59,7 +61,7 @@ are labeled `model_observation` or `before_handoff`. A failed/interrupted model
 request records a system step with its observation. Terminal capture is attempted
 with a two-second timeout after input release and before restoring klickwerk;
 its failure is explicit. These images are not a video or proof of task success. Screenshots are excluded from progress snapshots,
-workflow files and text-only consolidation. The latest 12 assistant message texts are retained, each limited to 32 KiB at UTF-8
+workflow files and ordinary text-only consolidation. Explicit demonstration screenshots are stored separately and sent when consolidating that demonstration. The latest 12 assistant message texts are retained, each limited to 32 KiB at UTF-8
 boundaries, with explicit truncation and eviction counts. Parsing failures retain
 the malformed text as well. The configured API key is redacted from retained
 response text/metadata. No audio, raw HTTP exchanges or private model reasoning

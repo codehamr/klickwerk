@@ -5,6 +5,10 @@ import {
   BookOpen,
   Check,
   Download,
+  Upload,
+  CircleDot,
+  Square,
+  Play,
   Pause,
   CircleAlert,
   Trash2,
@@ -29,6 +33,7 @@ import { Tooltip, TooltipProvider } from "./components/ui/tooltip";
 import { SettingsDialog } from "./components/settings";
 import { Timeline } from "./components/timeline";
 import { WorkflowDialog, type WorkflowSource } from "./components/workflow";
+import { TrainingDialog } from "./components/training";
 import { taskSuggestions } from "./lib/suggestions";
 
 export function App() {
@@ -38,6 +43,10 @@ export function App() {
   const [fatal, setFatal] = useState("");
   const [task, setTask] = useState("");
   const [refinement, setRefinement] = useState("");
+  const [trainingOpen, setTrainingOpen] = useState(false);
+  const trainingRun = useRef<number | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -62,6 +71,9 @@ export function App() {
   const resumedRun = useRef<number | null>(null);
   const pointerPosition = useRef<[number, number] | null>(null);
   const run = snapshot?.run;
+  const recording =
+    run?.phase === "training" || run?.phase === "training_paused";
+  const trainingPaused = run?.phase === "training_paused";
   const recovering = run?.phase === "recovering";
   const pendingResume = snapshot?.pending_resume_run_id;
   const active = !!run && activePhases.includes(run.phase);
@@ -232,6 +244,39 @@ export function App() {
     }
   }, [run?.phase, run?.id, focusPrompt]);
 
+  useEffect(() => {
+    if (recording && run) trainingRun.current = run.id;
+    if (
+      !recording &&
+      run?.training &&
+      trainingRun.current === run.id &&
+      !snapshot?.activity_busy
+    ) {
+      trainingRun.current = null;
+      setWorkflowSource({
+        run,
+        correction: "",
+        reviewTraining: true,
+        name: snapshot?.workflows.find((w) => w.id === run.workflow_id)?.name,
+      });
+    }
+  }, [recording, run, snapshot?.activity_busy, snapshot?.workflows]);
+  async function importWorkflow(file?: File) {
+    if (!file) return;
+    setImporting(true);
+    setNotice("");
+    try {
+      if (file.size > 65536)
+        throw new Error("Workflow files must be smaller than 64 KiB.");
+      const learning = await api.importWorkflow(await file.text());
+      setWorkflowSource({ ...learning, imported: true });
+    } catch (error) {
+      setNotice(errorText(error));
+    } finally {
+      setImporting(false);
+      if (importRef.current) importRef.current.value = "";
+    }
+  }
   function clearComposer() {
     setDismissedRun(-1);
     setTask("");
@@ -268,12 +313,16 @@ export function App() {
     setSavedNotice(t("Workflow deleted. A fresh session is ready."));
   }
   function prepareWorkflow() {
-    if (!run) return;
-    setWorkflowSource({
-      run,
-      correction: refinement.trim(),
-      name: snapshot?.workflows.find((w) => w.id === run.workflow_id)?.name,
-    });
+    if (refining && run) {
+      setWorkflowSource({
+        run,
+        correction: refinement.trim(),
+        name: snapshot?.workflows.find((w) => w.id === run.workflow_id)?.name,
+        reviewTraining: !!run.training,
+      });
+    } else if (task.trim()) {
+      setWorkflowSource({ prompt: task.trim(), name: selectedWorkflow?.name });
+    }
   }
   async function exportHistory() {
     if (!run || active || starting || mic || exporting) return;
@@ -430,8 +479,8 @@ export function App() {
           <div className="header-actions">
             {active && (
               <Button variant="secondary" onClick={() => void stop()}>
-                <Pause size={16} />
-                {t("Stop")}
+                {recording ? <Square size={16} /> : <Pause size={16} />}
+                {recording ? t("Finish recording") : t("Stop")}
               </Button>
             )}
             <span className="desktop-label">
@@ -457,7 +506,9 @@ export function App() {
               {t("YOUR DESKTOP. A LITTLE LIGHTER.")}
             </div>
             <h1 id="welcome-title">
-              {refining ? (
+              {recording ? (
+                <span>{t("Show me how.")}</span>
+              ) : refining ? (
                 <>
                   <span>{t("Back to you.")}</span>
                 </>
@@ -474,21 +525,23 @@ export function App() {
               )}
             </h1>
             <p>
-              {refining
-                ? t("Review the result, refine it, or keep it for next time.")
-                : recovering
-                  ? t(
-                      "Your task continues after Windows permission is approved.",
-                    )
-                  : active
+              {recording
+                ? t("You’re in control. Demonstrate the task in your apps.")
+                : refining
+                  ? t("Review the result, refine it, or keep it for next time.")
+                  : recovering
                     ? t(
-                        takeoverEnabled
-                          ? "Move the mouse deliberately, click, scroll, or press a key to interrupt."
-                          : "Use Stop to cancel startup.",
+                        "Your task continues after Windows permission is approved.",
                       )
-                    : t(
-                        "Describe the outcome. I’ll handle the clicks and typing.",
-                      )}
+                    : active
+                      ? t(
+                          takeoverEnabled
+                            ? "Move the mouse deliberately, click, scroll, or press a key to interrupt."
+                            : "Use Stop to cancel startup.",
+                        )
+                      : t(
+                          "Describe the outcome. I’ll handle the clicks and typing.",
+                        )}
             </p>
           </section>
 
@@ -597,7 +650,53 @@ export function App() {
                 </button>
               </div>
             )}
-            {active ? (
+            {recording ? (
+              <div
+                className="training-recording"
+                role="status"
+                aria-live="polite"
+              >
+                <span
+                  className={trainingPaused ? "status-dot" : "recording-dot"}
+                />
+                <h2>
+                  {trainingPaused
+                    ? t("Recording paused")
+                    : t("Recording your example")}
+                </h2>
+                <p>
+                  {t("{events} events · {images} screenshots", {
+                    events: run?.training?.events ?? 0,
+                    images: run?.training?.screenshots ?? 0,
+                  })}{" "}
+                  · {formatTime(run?.training?.elapsed_ms ?? 0)}
+                </p>
+                <p className="field-hint">
+                  {t(
+                    "Ctrl + Shift + F8 to pause · Ctrl + Shift + F9 to finish",
+                  )}
+                </p>
+                <div className="training-controls">
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      void api
+                        .pauseTraining(!trainingPaused)
+                        .catch((e) => setNotice(errorText(e)))
+                    }
+                  >
+                    {trainingPaused ? <Play size={16} /> : <Pause size={16} />}
+                    {trainingPaused
+                      ? t("Resume recording")
+                      : t("Pause recording")}
+                  </Button>
+                  <Button onClick={() => void stop()}>
+                    <Square size={16} />
+                    {t("Finish recording")}
+                  </Button>
+                </div>
+              </div>
+            ) : active ? (
               <div className="active-message" role="status" aria-live="polite">
                 <span className="activity-orbit">
                   <MousePointer2 size={25} />
@@ -735,9 +834,11 @@ export function App() {
             <span>
               <MousePointer2 size={13} />
               {t(
-                recovering
-                  ? "Use Stop to cancel continuation."
-                  : "Once running, move the mouse deliberately, click, or type to take over.",
+                recording
+                  ? "Recording is active only while you choose. Pause before sensitive steps."
+                  : recovering
+                    ? "Use Stop to cancel continuation."
+                    : "Once running, move the mouse deliberately, click, or type to take over.",
               )}
             </span>
             {!active && (
@@ -788,21 +889,31 @@ export function App() {
               </button>
             </div>
           )}
-          {refining && run && (
-            <div className="learning-row">
-              <span>
-                <BookOpen size={16} />
-                {t("Turn this session into a better start next time.")}
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={starting || mic}
-                onClick={prepareWorkflow}
-              >
-                {run.workflow_id ? t("Update workflow") : t("Save as workflow")}
-                <ArrowRight size={14} />
-              </Button>
+          {!active && (
+            <div className="learning-row workflow-options">
+              <span>{t("Keep it for next time, or show me how first.")}</span>
+              <div className="workflow-option-buttons">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={starting || mic || (!refining && !task.trim())}
+                  onClick={() => setTrainingOpen(true)}
+                >
+                  <CircleDot size={16} />
+                  {t("Show me how")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={starting || mic || (!refining && !task.trim())}
+                  onClick={prepareWorkflow}
+                >
+                  <BookOpen size={16} />
+                  {refining && run?.workflow_id
+                    ? t("Update workflow")
+                    : t("Save as workflow")}
+                </Button>
+              </div>
             </div>
           )}
           {refining && run && (
@@ -835,7 +946,7 @@ export function App() {
               </button>
             </div>
           )}
-          {current && run && (active || completedDetails) && (
+          {current && run && ((active && !recording) || completedDetails) && (
             <>
               <Timeline steps={run.steps} />
               {active && (
@@ -973,6 +1084,28 @@ export function App() {
               )}
             </>
           )}
+          {!active && (
+            <div className="workflow-import">
+              <input
+                ref={importRef}
+                type="file"
+                accept=".json,application/json"
+                className="sr-only"
+                aria-label={t("Choose workflow file")}
+                onChange={(e) => void importWorkflow(e.target.files?.[0])}
+                disabled={starting || mic || importing}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={starting || mic || importing}
+                onClick={() => importRef.current?.click()}
+              >
+                <Upload size={15} />
+                {t("Import workflow")}
+              </Button>
+            </div>
+          )}
           {snapshot.workflow_error && (
             <div className="inline-notice" role="alert">
               <span>{t(snapshot.workflow_error)}</span>
@@ -999,6 +1132,20 @@ export function App() {
           }}
           returnFocus={focusPrompt}
         />
+        {trainingOpen && (
+          <TrainingDialog
+            task={refining ? run!.task : task.trim()}
+            runId={refining ? run!.id : undefined}
+            workflowId={selectedWorkflow?.id}
+            correction={refining ? refinement : undefined}
+            onClose={() => setTrainingOpen(false)}
+            onStarted={() => {
+              setRefinement("");
+              setSavedNotice("");
+              setNotice("");
+            }}
+          />
+        )}
         {workflowSource && (
           <WorkflowDialog
             source={workflowSource}
@@ -1009,6 +1156,10 @@ export function App() {
             onUse={useWorkflow}
             onDelete={deleteWorkflow}
             onSaved={(workflow, learned) => {
+              if ("prompt" in workflowSource) {
+                setSelectedWorkflow({ id: workflow.id, name: workflow.name });
+                setTask(workflow.prompt);
+              }
               setSelectedWorkflow((current) =>
                 current?.id === workflow.id
                   ? { id: workflow.id, name: workflow.name }
@@ -1018,9 +1169,11 @@ export function App() {
                 setTask(workflow.prompt);
               setSavedNotice(
                 t(
-                  learned
-                    ? "“{name}” learned from this session. The improved start prompt is saved."
-                    : "“{name}” is saved with your corrections. Learning was unavailable.",
+                  "prompt" in workflowSource
+                    ? "“{name}” saved as a workflow."
+                    : learned
+                      ? "“{name}” learned from this session. The improved start prompt is saved."
+                      : "“{name}” is saved with your corrections. Learning was unavailable.",
                   { name: workflow.name },
                 ),
               );

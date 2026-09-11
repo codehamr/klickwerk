@@ -1619,3 +1619,82 @@ input::placeholder {
     transform: translateY(0);
   }
 }
+
+/* Optional workflow actions stay close to the task, without competing with Start. */
+.workflow-option-buttons,
+.training-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.workflow-options {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.workflow-import {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.workflow-filename {
+  overflow-wrap: anywhere;
+}
+.training-goal {
+  border-left: 3px solid var(--accent);
+  padding: 8px 14px;
+  overflow-wrap: anywhere;
+}
+.training-steps {
+  padding-left: 22px;
+  display: grid;
+  gap: 12px;
+  line-height: 1.6;
+}
+.training-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 0;
+  cursor: pointer;
+}
+.training-option input {
+  margin-top: 4px;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.training-option span {
+  display: grid;
+  gap: 5px;
+}
+.training-option small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.training-recording {
+  text-align: center;
+  padding: 38px 20px;
+}
+.training-recording > .recording-dot,
+.training-recording > .status-dot {
+  display: inline-block;
+}
+.training-recording h2 {
+  margin: 14px 0;
+}
+.training-recording p {
+  margin: 12px 0;
+}
+.training-controls {
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.training-setup .notice {
+  color: var(--ink);
+}
+.training-steps {
+  list-style-type: decimal;
+}

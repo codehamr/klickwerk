@@ -29,18 +29,22 @@ tools; users do not install them.
    control to you. Choose **Continue** as is, or enter a correction and choose
    **Refine & continue**. Success, questions, and failures also return control;
    successful tasks remain available for refinement until you choose **New task**.
-7. Choose **Save as workflow** or **Update workflow** at any handoff, including a
-   failed run. Edit the name or intended start prompt and choose **Learn & save**.
-   The model finalizes one reusable prompt from the session's actions, outcome,
-   prior knowledge and corrections, including any unsent refinement. A visible
-   learning state and save confirmation show when the new instructions are stored.
-   If learning fails, retry or explicitly **Save current prompt** with your
-   corrections; the app does not claim that consolidation succeeded.
-8. Open a saved workflow from **Your workflows**. **Use workflow** loads its single
-   start prompt into a fresh session. Saving edits also runs finalization. Delete
-   directly from its card or dialog; a visible confirmation clears the workflow,
-   main prompt and temporary session together.
-9. The UI and suggestions automatically use German on a German Windows display
+7. **Save as workflow** is available before the first run, without a connected model.
+   A typed or dictated prompt can be named and saved immediately. For an existing
+   run, **Learn & save** combines the goal, corrections, actions and outcome.
+   Failed learning offers retry or an explicit **Save current prompt** fallback.
+8. Optionally choose **Show me how** beside the prompt, before or after a run.
+   Start recording, switch to the target app and demonstrate the task. A floating
+   recording panel offers Pause and Finish. **Ctrl + Shift + F8** toggles pause;
+   **Ctrl + Shift + F9** finishes. The model then proposes an improved prompt;
+   review or edit it and choose **Save workflow**. Nothing runs when saving.
+9. Open a saved workflow from **Your workflows**. **Use workflow** loads its prompt
+   into a fresh session. **Export workflow** shares a small JSON file; **Import
+   workflow** previews a file before saving it as a separate entry. Files live in
+   `workflows/` beside the EXE, with short names such as `monthly-report.json`.
+   Collisions receive a numeric suffix. Delete from the card or dialog; a visible
+   confirmation also clears the current prompt and temporary session.
+10. The UI and suggestions automatically use German on a German Windows display
    language, otherwise English. **Settings → Preferences → Language** lets you
    select **Automatic**, **Deutsch** or **English**. Your own text is never translated
    when you change the UI language.
@@ -87,8 +91,11 @@ Escape closes an open menu first, then Settings.
 
 The app sends desktop screenshots, task text, action history, and corrections to
 the **selected model server** while a task runs. Preparing a workflow sends its
-text history to that same server without capturing a screenshot. Learning means
-reusing saved instructions and corrections; it does not retrain the model.
+text history to that same server. Explicit demonstrations additionally send their
+recorded events and any opted-in screenshots after you finish. Saving an unrun
+prompt and importing/exporting workflows do not need a model. Learning means
+reusing instructions; it does not retrain model weights. See [training and portable
+workflows](docs/training.md) for capture limits and privacy behavior.
 
 After a task finishes, fails, pauses or asks a question, **Export history (JSON)**
 lets you save its recorded actions, corrections, attempts and outcomes for analysis.
@@ -98,12 +105,14 @@ starting a fresh session; the app does not retain old session histories. See the
 [report format and coverage](docs/session-export.md).
 
 Action history stays in memory for the current session, including after a save so
-that you can continue refining. Only the consolidated prompt, name, ID and update
-time are written to `workflows.json` beside the EXE. Old workflow memory is merged
-into its prompt on load; the next library write removes legacy raw history.
+that you can continue refining. Each `workflows/<short-name>.json` contains only a
+format marker, version, name and reusable prompt. IDs come from filenames. Legacy
+`workflows.json` versions 1 and 2 migrate once into this folder; the original is
+preserved. The old file is no longer read once the folder exists.
 Explicit JSON exports are separate files and include recent observation and pre-handoff screenshots
 (up to 12 frames, bounded to 8 MiB of image data), window details, timing, recovery
 decisions and bounded assistant responses.
+Explicit demonstration evidence is also included in history exports when present.
 Screenshots otherwise remain temporary in RAM; audio is not saved.
 **New task** and workflow deletion discard
 the temporary session. There is no persistent list of previous tasks.

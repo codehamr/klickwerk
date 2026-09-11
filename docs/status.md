@@ -1,6 +1,37 @@
 # Validation status — 2026-09-11
 
-## Current quiet recovery follow-up
+## Demonstration training and portable workflows
+
+The current `build/klickwerk.exe` includes explicit demonstration recording,
+reviewable model consolidation, unrun prompt saving without a model, and portable
+workflow import/export. Files now live independently in `workflows/` beside the
+EXE; legacy libraries migrate without changing the original. See
+[training and portable workflows](training.md).
+
+Validation: 58 portable Rust tests pass, including bounded demonstration evidence,
+strict import parsing, filename collisions, migration, external-file preservation
+and local-stub requests with optional training images. The 44 Chromium cases have
+been verified (43 passed together; the existing StrictMode recovery bootstrap
+fixture passed separately after restarting Vite to clear HMR module identities).
+The six new UI cases cover unrun saves, recording controls, review before saving,
+failure/retry/fallback, portable round trips, invalid files, German labels,
+cancellation and stale drafts. TypeScript/ESLint, rustfmt, and Windows-target
+Clippy with warnings denied pass. English and German dialog layouts were inspected,
+including dark mode at 760 × 640; the training notice contrast was improved.
+
+The isolated Wine/Xvfb native suite passes its recording checks without desktop
+input: recognized/password/unknown field filtering, physical coordinates, heartbeat
+shutdown, hook/panel/hotkey teardown, and temporary portable-file creation, collision
+handling and update/reload. The existing broker/recovery suite also runs on that
+isolated desktop. No real model, user desktop or user files are used by these tests.
+Third-party application capture, real WebView2/SAPI behavior and actual model
+consolidation quality still require harmless target-PC acceptance. Literal recording
+intentionally omits custom/unknown text fields; see the capture limitations.
+
+Release: `build/klickwerk.exe`, 6,638,080 bytes. SHA-256:
+`7eb1bba9b994b40c0cf544e7cfa38089b55f8f975a3050dca2c927afc2079ef5`.
+
+## Previous quiet recovery follow-up
 
 Revision `2026-09-quiet-recovery-v8` fixes the intermediate window appearance in
 the latest successful Task Manager run. The old instance raised its window before

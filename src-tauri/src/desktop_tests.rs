@@ -403,6 +403,7 @@ fn quiet_resume_checks() -> Result<(), String> {
         next_id: AtomicU64::new(73),
         requests: Mutex::new(HashMap::new()),
         speech: Mutex::new(None),
+        training_paused: Arc::new(AtomicBool::new(false)),
         session: Mutex::new(Session::default()),
         restored_refinement: Mutex::new(String::new()),
         pending_resume: Mutex::new(Some(73)),
@@ -463,6 +464,7 @@ pub fn run() -> i32 {
         .build()
         .unwrap();
     let result = runtime.block_on(async {
+        platform::training::fixture_checks()?;
         quiet_resume_checks()?;
         suite().await?;
         if std::env::args().any(|arg| arg == "--with-disposable-input") {

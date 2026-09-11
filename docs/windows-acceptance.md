@@ -216,3 +216,33 @@ unchanged. Its transport simulation does not request UAC or operate the target a
   response and terminal frame/window before handoff. Confirm permission failures
   remain explicit. Wine/editor fixtures do not verify Windows 11 Task Manager's
   specific WinUI accessibility provider; complete this test on the target PC.
+
+## Explicit demonstration and portable workflow acceptance
+
+Use an isolated Windows desktop and disposable sample text; do not demonstrate
+mail sending, purchases, deletion or changes to real user files.
+
+- Save typed and dictated prompts before their first run with no model connected.
+  Restart and verify the exact prompt loads from `workflows/<short-name>.json`.
+- Demonstrate in a disposable editor. Verify the floating panel stays visible,
+  never sends input, and supports Pause/Finish and both global shortcuts. Switch
+  apps and inspect pointer down/up, scroll, focus and grouped text in an explicit
+  session export. Check negative monitor coordinates and mixed DPI layouts.
+- Use a disposable password field and custom text field. Literal text must be
+  omitted. Verify clipboard contents are not read. Pause before sample sensitive
+  steps and verify the gap; resume and finish without starting agent execution.
+- Enable screenshots using only sample data. Inspect delayed foreground crops,
+  image/event associations, panel masking and size/count limits. Check behavior
+  when the final click immediately precedes Finish.
+- Disconnect the UI, close the app, and occupy a recording shortcut before startup.
+  Recording must end/refuse cleanly; hooks and shortcuts must be released.
+- Finish with a compatible model: the improved prompt must be reviewable before
+  saving. Edit it, cancel it, retry analysis after a provider failure, and explicitly
+  save the fallback. The workflow file must contain no raw events or screenshots.
+- Import a valid file twice: separate names must be created. Reject malformed,
+  unknown-version and oversized files. Export and reimport without a model.
+  Verify collisions, read-only folders, and external edits do not overwrite data.
+- Copy a legacy library into an isolated app folder. Verify one-time migration
+  preserves the original and does not resurrect a deleted workflow on restart.
+- Check both English and German UI, training from a paused/completed run, the
+  latest unsent refinement, and model adaptation with windows moved afterward.

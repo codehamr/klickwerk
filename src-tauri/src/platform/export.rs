@@ -13,7 +13,22 @@ pub fn choose_path(owner: usize, filename: &str, german: bool) -> Result<Option<
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
             .ok()
             .map_err(|_| "The export dialog could not be opened.")?;
-        let result = choose(owner, filename, german);
+        let result = choose(owner, filename, german, false);
+        CoUninitialize();
+        result.map_err(|_| "The export dialog could not be opened. Try again.".into())
+    }
+}
+
+pub fn choose_workflow_path(
+    owner: usize,
+    filename: &str,
+    german: bool,
+) -> Result<Option<PathBuf>, String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(|_| "The export dialog could not be opened.")?;
+        let result = choose(owner, filename, german, true);
         CoUninitialize();
         result.map_err(|_| "The export dialog could not be opened. Try again.".into())
     }
@@ -23,6 +38,7 @@ unsafe fn choose(
     owner: usize,
     filename: &str,
     german: bool,
+    workflow: bool,
 ) -> windows::core::Result<Option<PathBuf>> {
     unsafe {
         let dialog: IFileSaveDialog =
@@ -40,7 +56,13 @@ unsafe fn choose(
         }])?;
         dialog.SetDefaultExtension(w!("json"))?;
         dialog.SetFileName(&HSTRING::from(filename))?;
-        dialog.SetTitle(&HSTRING::from(if german {
+        dialog.SetTitle(&HSTRING::from(if workflow {
+            if german {
+                "Workflow exportieren"
+            } else {
+                "Export workflow"
+            }
+        } else if german {
             "Verlauf als JSON exportieren"
         } else {
             "Export history as JSON"

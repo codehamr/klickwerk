@@ -77,6 +77,8 @@ pub struct RunView {
     pub workflow_id: Option<String>,
     pub started_at: u64,
     pub attempts: Vec<Attempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training: Option<crate::training::Summary>,
     #[serde(default)]
     pub recovery: Option<crate::diagnostics::InputFailure>,
     #[serde(default)]
@@ -99,6 +101,7 @@ impl Default for RunView {
             workflow_id: None,
             started_at: 0,
             attempts: vec![],
+            training: None,
             recovery: None,
             recovery_events: vec![],
             evidence: Arc::default(),
@@ -207,6 +210,8 @@ impl RunView {
 // allocation also avoids copying several MiB on every progress event.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training: Option<crate::training::Report>,
     pub frames_observed: usize,
     pub frames_omitted: usize,
     pub frames: Vec<ScreenEvidence>,
@@ -352,7 +357,7 @@ impl SessionExport {
 }
 
 // Replace only after the complete report reaches disk; keep an existing export on failure.
-fn write_report(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_report(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
     let parent = path.parent().ok_or("Choose a folder for the export.")?;
     let temporary = parent.join(format!(
@@ -381,6 +386,34 @@ fn write_report(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::workflow::add_correction;
+
+    #[test]
+    fn demonstration_text_stays_out_of_ui_snapshots_but_is_explicitly_exportable() {
+        let mut run = RunView {
+            id: 9,
+            phase: "stopped".into(),
+            ..RunView::default()
+        };
+        let mut training = crate::training::Report::default();
+        training.push(
+            10,
+            None,
+            crate::training::Input::Text {
+                text: "sample-private-demonstration".into(),
+            },
+        );
+        run.training = Some(training.summary());
+        Arc::make_mut(&mut run.evidence).training = Some(training);
+        let snapshot = serde_json::to_string(&run).unwrap();
+        assert!(!snapshot.contains("sample-private-demonstration"));
+        assert!(snapshot.contains("\"events\":1"));
+        let export = SessionExport::new(run, 9, None, String::new(), None).unwrap();
+        let report = serde_json::to_value(export).unwrap();
+        assert_eq!(
+            report["evidence"]["training"]["events"][0]["text"],
+            "sample-private-demonstration"
+        );
+    }
 
     #[test]
     fn diagnostic_frames_are_bounded_exported_and_excluded_from_ui_snapshots() {

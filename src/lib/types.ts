@@ -11,6 +11,8 @@ export interface Settings {
 }
 
 export type Phase =
+  | "training"
+  | "training_paused"
   | "idle"
   | "recovering"
   | "checking"
@@ -110,8 +112,62 @@ export interface Run {
   workflow_id: string | null;
   started_at: number;
   attempts: Attempt[];
+  training?: TrainingSummary | null;
   recovery?: InputFailure | null;
   recovery_events?: RecoveryEvent[];
+}
+export interface TrainingOptions {
+  text: boolean;
+  screenshots: boolean;
+}
+export interface TrainingSummary {
+  events: number;
+  screenshots: number;
+  elapsed_ms: number;
+  stop_reason: string;
+}
+export interface TrainingReport {
+  version: number;
+  options: TrainingOptions;
+  events: ({
+    id: number;
+    elapsed_ms: number;
+    window: null | {
+      handle: number;
+      title: string;
+      application: string;
+      class_name: string;
+      bounds: [number, number, number, number];
+      focused_control: number;
+    };
+  } & (
+    | { type: "focus" | "omitted_text" | "pause" | "resume" }
+    | {
+        type: "pointer";
+        phase: string;
+        button: string;
+        position: [number, number];
+      }
+    | {
+        type: "scroll";
+        axis: string;
+        delta: number;
+        position: [number, number];
+      }
+    | { type: "text"; text: string }
+    | { type: "key"; key: string; modifiers: string[] }
+  ))[];
+  screenshots: {
+    after_event_id: number;
+    elapsed_ms: number;
+    bounds: [number, number, number, number];
+    image_size: [number, number];
+    jpeg_base64: string;
+  }[];
+  omitted_events: number;
+  omitted_screenshots: number;
+  elapsed_ms: number;
+  stop_reason: string;
 }
 export interface Attempt {
   interruption?: {
@@ -151,6 +207,7 @@ export interface SessionExport {
   warm_start_prompt: string;
   unsent_refinement: string | null;
   evidence: {
+    training?: TrainingReport;
     frames_observed: number;
     frames_omitted: number;
     model_responses_observed: number;
@@ -191,6 +248,7 @@ export interface Snapshot {
   config_error: string | null;
   run: Run;
   platform: "windows" | "preview";
+  activity_busy?: boolean;
   locale: "en" | "de";
   workflows: WorkflowSummary[];
   workflow_error: string | null;
@@ -209,6 +267,8 @@ export interface SpeechUpdate {
 }
 
 export const activePhases: Phase[] = [
+  "training",
+  "training_paused",
   "recovering",
   "checking",
   "countdown",

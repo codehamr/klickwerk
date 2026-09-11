@@ -12,7 +12,7 @@ management and tooltips. Keep identifiers and translation keys English. Provide
 German UI translations in `src/lib/i18n.ts` and bilingual tasks in `src/lib/suggestions.ts`.
 
 Extend both the native bridge types and browser fixture adapter when adding a new
-state. Exercise empty, loading, running, waiting, stopped, done, and error states.
+state. Exercise empty, loading, running, training, training_paused, waiting, stopped, done, and error states.
 The preview query `?scenario=ask` shows a question; `?scenario=error` shows a server
 failure; `?learning=error` tests finalization failure and explicit fallback saving.
 These fixture scenarios exist only in the browser adapter.
@@ -43,3 +43,8 @@ Windows locks the default `test-results/` directory.
 
 Do not infer native takeover, input, WebView2, or Windows accessibility behavior from
 browser tests. Those require the separate native fixtures and Windows acceptance.
+
+`tests/training.spec.ts` covers unrun saves without a model, explicit training setup,
+pause/resume, review before persistence, failed analysis and retry/fallback, portable
+JSON import/export, invalid/oversized files, and German controls. Browser training
+uses synthetic counters only; it does not install input listeners or capture text.

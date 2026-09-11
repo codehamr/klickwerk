@@ -9,6 +9,7 @@ import {
   type Workflow,
   type SessionExport,
 } from "./types";
+import { downloadWorkflow, parseWorkflow, validateLearning } from "./workflows";
 import { version } from "../../package.json";
 import { t } from "./i18n";
 import { normalizeServerUrl } from "./utils";
@@ -54,10 +55,12 @@ const drafts = new Map<
     correction: string;
     workflow: Workflow;
     sourceUpdated?: number;
+    generation: number;
   }
 >();
 let timer: ReturnType<typeof setTimeout> | undefined;
 let generation = 0;
+let trainingTimer: ReturnType<typeof setInterval> | undefined;
 let memory = "";
 function summaries() {
   state.workflows = workflows.map((w) => ({
@@ -146,6 +149,58 @@ export async function previewCall<T>(
     case "test_connection":
       await new Promise((resolve) => setTimeout(resolve, 200));
       return "Preview connection looks good. No server was contacted." as T;
+    case "import_workflow":
+      return parseWorkflow(String(args.contents)) as T;
+    case "export_workflow": {
+      const workflow = workflows.find((w) => w.id === args.id);
+      if (!workflow) throw new Error("This workflow is no longer available.");
+      return downloadWorkflow(workflow) as T;
+    }
+    case "start_training": {
+      if (activePhases.includes(state.run.phase))
+        throw new Error("A task is already running.");
+      if (args.runId != null && args.runId !== state.run.id)
+        throw new Error("This task is no longer available to save.");
+      if (args.runId == null) {
+        const saved = workflows.find((w) => w.id === args.workflowId);
+        memory = saved?.prompt ?? "";
+        state.run = {
+          ...structuredClone(emptyRun),
+          id: Date.now(),
+          task: String(args.task),
+          workflow_id: saved?.id ?? null,
+          started_at: Date.now(),
+        };
+      }
+      if (args.correction)
+        state.run.steps.push(note("user", String(args.correction)));
+      generation++;
+      drafts.clear();
+      state.run.phase = "training";
+      state.run.training = {
+        events: 0,
+        screenshots: 0,
+        elapsed_ms: 0,
+        stop_reason: "",
+      };
+      state.run.interrupted = false;
+      state.run.message =
+        "Show the task in your apps. Finish with Ctrl + Shift + F9.";
+      trainingTimer = setInterval(() => {
+        if (state.run.phase !== "training" || !state.run.training) return;
+        state.run.training.elapsed_ms += 500;
+        state.run.training.events = Math.min(6, state.run.training.events + 1);
+        emit();
+      }, 500);
+      emit();
+      return undefined as T;
+    }
+    case "pause_training":
+      if (!["training", "training_paused"].includes(state.run.phase))
+        throw new Error("No demonstration is being recorded.");
+      state.run.phase = args.paused ? "training_paused" : "training";
+      emit();
+      return undefined as T;
     case "start_task": {
       if (activePhases.includes(state.run.phase))
         throw new Error("A task is already running.");
@@ -282,6 +337,15 @@ export async function previewCall<T>(
       return undefined as T;
     }
     case "stop_task":
+      if (["training", "training_paused"].includes(state.run.phase)) {
+        clearInterval(trainingTimer);
+        state.run.phase = "stopped";
+        state.run.message = "Demonstration recorded.";
+        if (state.run.training)
+          state.run.training.stop_reason = "Demonstration recorded.";
+        emit();
+        return undefined as T;
+      }
       if (!activePhases.includes(state.run.phase)) return undefined as T;
       generation++;
       clearTimeout(timer);
@@ -368,9 +432,10 @@ export async function previewCall<T>(
       const saved = workflows.find(
         (w) => w.id === (runId != null ? state.run.workflow_id : args.id),
       );
-      if (runId == null && !saved)
-        throw new Error("This workflow is no longer available.");
       const learning = args.learning as Learning;
+      validateLearning(learning);
+      const revision = generation;
+      const consolidate = args.consolidate !== false;
       const corrections =
         runId != null
           ? state.run.steps
@@ -379,12 +444,14 @@ export async function previewCall<T>(
           : [];
       const correction = String(args.correction ?? "").trim();
       if (correction) corrections.push(correction);
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      if (consolidate) await new Promise((resolve) => setTimeout(resolve, 450));
       const warning =
+        consolidate &&
         new URLSearchParams(location.search).get("learning") === "error"
           ? "Cannot reach the model server. Check that it is running and try again."
           : null;
       if (
+        revision !== generation ||
         activePhases.includes(state.run.phase) ||
         (runId != null &&
           (state.run.id !== runId || state.run.steps.length !== sourceSteps)) ||
@@ -407,9 +474,10 @@ export async function previewCall<T>(
         name: ["My workflow", "Mein Workflow"].includes(learning.name)
           ? t("My desktop workflow")
           : learning.name,
-        prompt: warning
-          ? instructions
-          : `${instructions}\n\n${t("Locate targets on the current desktop and verify each result before continuing.")}${runId != null && state.run.phase !== "done" ? ` ${t("The previous attempt was not verified as complete; check the last attempted action before repeating it.")}` : ""}`,
+        prompt:
+          warning || !consolidate
+            ? instructions
+            : `${instructions}\n\n${t("Locate targets on the current desktop and verify each result before continuing.")}${runId != null && state.run.phase !== "done" ? ` ${t("The previous attempt was not verified as complete; check the last attempted action before repeating it.")}` : ""}`,
         updated_at: 0,
       };
       drafts.set(String(args.requestId), {
@@ -418,6 +486,7 @@ export async function previewCall<T>(
         correction,
         workflow,
         sourceUpdated: saved?.updated_at,
+        generation: revision,
       });
       return {
         token: args.requestId,
@@ -430,6 +499,7 @@ export async function previewCall<T>(
       if (!draft)
         throw new Error("This workflow draft is no longer available.");
       if (
+        draft.generation !== generation ||
         activePhases.includes(state.run.phase) ||
         (draft.runId != null &&
           (state.run.id !== draft.runId ||
@@ -446,7 +516,12 @@ export async function previewCall<T>(
         throw new Error(
           "This session changed. Save again to include the latest changes.",
         );
-      const saved = { ...draft.workflow, updated_at: Date.now() };
+      const saved = {
+        ...draft.workflow,
+        ...((args.learning as Learning | null) ?? {}),
+        updated_at: Date.now(),
+      };
+      validateLearning(saved);
       if (!saved.name.trim() || !saved.prompt.trim())
         throw new Error("Add a name and start prompt.");
       persist([...workflows.filter((w) => w.id !== saved.id), saved]);

@@ -37,6 +37,7 @@ pub struct Snapshot {
     config_error: Option<String>,
     run: RunView,
     platform: &'static str,
+    activity_busy: bool,
     locale: &'static str,
     workflows: Vec<WorkflowSummary>,
     workflow_error: Option<String>,
@@ -53,6 +54,7 @@ pub struct AppState {
     next_id: AtomicU64,
     requests: Mutex<HashMap<String, oneshot::Sender<()>>>,
     speech: Mutex<Option<Arc<AtomicBool>>>,
+    training_paused: Arc<AtomicBool>,
     session: Mutex<Session>,
     restored_refinement: Mutex<String>,
     pending_resume: Mutex<Option<u64>>,
@@ -114,6 +116,7 @@ impl AppState {
             pending_resume_run_id: *self.pending_resume.lock().unwrap(),
             run,
             platform: "windows",
+            activity_busy: self.active.lock().unwrap().is_some(),
             locale: if unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() }
                 & 0x03ff
                 == 7
@@ -536,6 +539,190 @@ async fn perform_restart(
 }
 
 #[tauri::command]
+fn import_workflow(contents: String) -> Result<Learning, String> {
+    workflow::PortableWorkflow::decode(contents.as_bytes())
+}
+
+#[tauri::command]
+async fn export_workflow(app: tauri::AppHandle, id: String) -> Result<Option<String>, String> {
+    let (bytes, filename, german) = {
+        let state = app.state::<AppState>();
+        let active = state.active.lock().unwrap();
+        if active.is_some() {
+            return Err("Finish the current activity before exporting workflows.".into());
+        }
+        let workflow = state.workflows.lock().unwrap().get(&id)?;
+        (
+            workflow::PortableWorkflow::encode(&workflow.learning)?,
+            format!("{}.json", workflow::slug(&workflow.learning.name)),
+            state.config.lock().unwrap().settings.ui_language() == "German",
+        )
+    };
+    let owner = app
+        .get_webview_window("main")
+        .ok_or("The main window is unavailable.")?
+        .hwnd()
+        .map_err(|_| "The main window is unavailable.")?
+        .0 as usize;
+    tokio::task::spawn_blocking(move || {
+        let Some(path) = platform::export::choose_workflow_path(owner, &filename, german)? else {
+            return Ok(None);
+        };
+        crate::session::write_report(&path, &bytes)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|_| "The export worker stopped unexpectedly.".to_owned())?
+}
+
+#[tauri::command]
+fn pause_training(app: tauri::AppHandle, paused: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let active = state.active.lock().unwrap();
+    if active.is_none()
+        || !["training", "training_paused"].contains(&state.view.lock().unwrap().phase.as_str())
+    {
+        return Err("No demonstration is being recorded.".into());
+    }
+    state.training_paused.store(paused, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_training(
+    app: tauri::AppHandle,
+    task: String,
+    run_id: Option<u64>,
+    workflow_id: Option<String>,
+    correction: Option<String>,
+    options: crate::training::Options,
+) -> Result<(), String> {
+    if task.trim().is_empty() || task.len() > 32768 {
+        return Err("Enter a task of at most 8,192 characters.".into());
+    }
+    let state = app.state::<AppState>();
+    let mut active = state.active.lock().unwrap();
+    if active.is_some()
+        || state.speech.lock().unwrap().is_some()
+        || state.pending_resume.lock().unwrap().is_some()
+    {
+        return Err("Finish the current activity before recording a demonstration.".into());
+    }
+    let mut view = state.view.lock().unwrap();
+    if let Some(id) = run_id {
+        if view.id != id
+            || view.task != task
+            || !["stopped", "done", "error", "waiting"].contains(&view.phase.as_str())
+        {
+            return Err("This task is no longer available to save.".into());
+        }
+        if let Some(text) = correction.filter(|t| !t.trim().is_empty()) {
+            let elapsed = view.elapsed_ms;
+            workflow::add_correction(&mut view.steps, &text, elapsed)?;
+        }
+    } else {
+        let memory = workflow_id
+            .as_ref()
+            .map(|id| {
+                state
+                    .workflows
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .map(|w| w.learning.prompt)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        *view = RunView {
+            id: state.next_id.fetch_add(1, Ordering::SeqCst) + 1,
+            task: task.trim().into(),
+            workflow_id,
+            started_at: crate::session::timestamp(),
+            ..RunView::default()
+        };
+        *state.session.lock().unwrap() = Session { memory };
+    }
+    // Re-recording replaces the previous demonstration, retaining actual run history.
+    Arc::make_mut(&mut view.evidence).training = None;
+    view.training = Some(crate::training::Summary::default());
+    view.phase = "training".into();
+    view.message = "Show the task in your apps. Finish with Ctrl + Shift + F9.".into();
+    view.interrupted = false;
+    view.question.clear();
+    view.result.clear();
+    view.recovery = None;
+    let cancel = Arc::new(AtomicBool::new(false));
+    *active = Some(cancel.clone());
+    state.training_paused.store(false, Ordering::SeqCst);
+    let paused = state.training_paused.clone();
+    let german = state.config.lock().unwrap().settings.ui_language() == "German";
+    state.drafts.lock().unwrap().clear();
+    // Reserve a new revision even when the same run is recorded again.
+    state.next_id.fetch_add(1, Ordering::SeqCst);
+    drop(view);
+    drop(active);
+    emit(&app);
+    tauri::async_runtime::spawn(async move {
+        let worker_app = app.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            platform::training::record(
+                options,
+                german,
+                cancel,
+                paused,
+                || {
+                    platform::now()
+                        .saturating_sub(worker_app.state::<AppState>().ui_at.load(Ordering::SeqCst))
+                        < 5000
+                },
+                |summary, paused| {
+                    {
+                        let state = worker_app.state::<AppState>();
+                        let mut view = state.view.lock().unwrap();
+                        view.training = Some(summary);
+                        view.phase = if paused {
+                            "training_paused"
+                        } else {
+                            "training"
+                        }
+                        .into();
+                    }
+                    emit(&worker_app);
+                },
+            )
+        })
+        .await;
+        {
+            let state = app.state::<AppState>();
+            let mut view = state.view.lock().unwrap();
+            view.phase = "stopped".into();
+            match report {
+                Ok(report) => {
+                    view.message = report.stop_reason.clone();
+                    if report.events.is_empty() && report.stop_reason != "Demonstration recorded." {
+                        view.phase = "error".into();
+                        view.training = None;
+                    } else {
+                        view.training = Some(report.summary());
+                    }
+                    Arc::make_mut(&mut view.evidence).training = Some(report);
+                }
+                Err(_) => {
+                    view.message = "The demonstration recorder stopped unexpectedly.".into();
+                    view.training = None;
+                }
+            }
+        }
+        // This is a recording handoff, not another outcome of the last agent
+        // attempt. Do not overwrite that attempt's execution diagnostics.
+        let _ = handoff(&app).await;
+        *app.state::<AppState>().active.lock().unwrap() = None;
+        emit(&app);
+    });
+    Ok(())
+}
+
+#[tauri::command]
 fn get_workflow(id: String, state: tauri::State<AppState>) -> Result<Workflow, String> {
     state.workflows.lock().unwrap().get(&id)
 }
@@ -595,15 +782,21 @@ struct PreparedWorkflow {
     source_steps: usize,
     source_workflow: Option<(String, u64)>,
     correction: Option<String>,
+    source_training_events: usize,
+    generation: u64,
     workflow: Workflow,
 }
 
 fn validate_draft(state: &AppState, draft: &PreparedWorkflow) -> Result<(), String> {
+    if state.next_id.load(Ordering::SeqCst) != draft.generation {
+        return Err("This session changed. Save again to include the latest changes.".into());
+    }
     if let Some(run_id) = draft.run_id {
         let view = state.view.lock().unwrap();
         if view.id != run_id
             || view.workflow_id.as_ref() != draft.source_workflow.as_ref().map(|(id, _)| id)
             || view.steps.len() != draft.source_steps
+            || view.training.as_ref().map(|t| t.events).unwrap_or(0) != draft.source_training_events
             || !["stopped", "done", "waiting", "error"].contains(&view.phase.as_str())
         {
             return Err("This session changed. Save again to include the latest changes.".into());
@@ -625,10 +818,11 @@ async fn prepare_workflow(
     correction: Option<String>,
     learning: Learning,
     request_id: String,
+    consolidate: Option<bool>,
 ) -> Result<WorkflowDraft, String> {
     learning.validate()?;
     let correction = correction.filter(|s| !s.trim().is_empty());
-    let (mut draft, task, memory, steps, outcome, settings) = {
+    let (mut draft, task, memory, steps, outcome, settings, training) = {
         let state = app.state::<AppState>();
         let active = state.active.lock().unwrap();
         if active.is_some() {
@@ -650,9 +844,6 @@ async fn prepare_workflow(
             .as_ref()
             .map(|id| state.workflows.lock().unwrap().get(id))
             .transpose()?;
-        if run_id.is_none() && saved.is_none() {
-            return Err("Choose a workflow or session to save.".into());
-        }
         let source_steps = if run_id.is_some() {
             view.steps.len()
         } else {
@@ -677,7 +868,10 @@ async fn prepare_workflow(
         let task = if run_id.is_some() {
             view.task.clone()
         } else {
-            saved.as_ref().unwrap().learning.prompt.clone()
+            saved
+                .as_ref()
+                .map(|w| w.learning.prompt.clone())
+                .unwrap_or_else(|| learning.prompt.clone())
         };
         let outcome = if run_id.is_some() {
             format!(
@@ -690,6 +884,12 @@ async fn prepare_workflow(
         let draft = PreparedWorkflow {
             run_id,
             source_steps,
+            source_training_events: if run_id.is_some() {
+                view.training.as_ref().map(|t| t.events).unwrap_or(0)
+            } else {
+                0
+            },
+            generation: state.next_id.load(Ordering::SeqCst),
             source_workflow: saved.as_ref().map(|w| (w.id.clone(), w.updated_at)),
             correction,
             workflow: Workflow {
@@ -701,15 +901,35 @@ async fn prepare_workflow(
             },
         };
         let settings = state.config.lock().unwrap().settings.clone();
-        (draft, task, memory, steps, outcome, settings)
+        let training = if run_id.is_some() {
+            view.evidence.training.clone()
+        } else {
+            None
+        };
+        (draft, task, memory, steps, outcome, settings, training)
     };
-    let provider = Provider::new(&settings)?;
-    let result = network(
-        app.clone(),
-        request_id.clone(),
-        provider.learn(&task, &memory, &steps, &outcome, &learning),
-    )
-    .await;
+    let result = if consolidate.unwrap_or(true) {
+        match Provider::new(&settings) {
+            Ok(provider) => {
+                network(
+                    app.clone(),
+                    request_id.clone(),
+                    provider.learn_with_training(
+                        &task,
+                        &memory,
+                        &steps,
+                        &outcome,
+                        &learning,
+                        training.as_ref(),
+                    ),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(workflow::fallback_prompt("", &steps, &learning))
+    };
     let warning = match result {
         Ok(learned) => {
             draft.workflow.learning = learned;
@@ -741,13 +961,17 @@ async fn prepare_workflow(
 }
 
 #[tauri::command]
-fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, String> {
+fn save_workflow(
+    app: tauri::AppHandle,
+    token: String,
+    learning: Option<Learning>,
+) -> Result<Workflow, String> {
     let state = app.state::<AppState>();
     let active = state.active.lock().unwrap();
     if active.is_some() {
         return Err("Take over before editing workflows.".into());
     }
-    let source = state
+    let mut source = state
         .drafts
         .lock()
         .unwrap()
@@ -755,6 +979,10 @@ fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, Strin
         .cloned()
         .ok_or("This workflow draft has expired. Prepare it again.")?;
     validate_draft(&state, &source)?;
+    if let Some(learning) = learning {
+        learning.validate()?;
+        source.workflow.learning = learning;
+    }
     let saved = state.workflows.lock().unwrap().save(source.workflow)?;
     if source.run_id.is_some() {
         let mut view = state.view.lock().unwrap();
@@ -772,6 +1000,7 @@ fn save_workflow(app: tauri::AppHandle, token: String) -> Result<Workflow, Strin
 }
 
 fn clear_session(state: &AppState) {
+    state.next_id.fetch_add(1, Ordering::SeqCst);
     state.pending_resume.lock().unwrap().take();
     state.restored_refinement.lock().unwrap().clear();
     *state.view.lock().unwrap() = RunView::default();
@@ -1171,7 +1400,13 @@ fn run_context(app: &tauri::AppHandle) -> String {
     let state = app.state::<AppState>();
     let steps = state.view.lock().unwrap().steps.clone();
     let session = state.session.lock().unwrap();
-    workflow::context(&session.memory, &steps)
+    let context = workflow::context(&session.memory, &steps);
+    drop(session);
+    let view = state.view.lock().unwrap();
+    match view.evidence.training.as_ref() {
+        Some(training) => format!("{context}\n\n{}", training.context()),
+        None => context,
+    }
 }
 
 struct LastInput {
@@ -1680,6 +1915,7 @@ pub fn run() {
         next_id: AtomicU64::new(next_id),
         requests: Mutex::new(HashMap::new()),
         speech: Mutex::new(None),
+        training_paused: Arc::new(AtomicBool::new(false)),
         session: Mutex::new(Session { memory }),
         restored_refinement: Mutex::new(refinement),
         pending_resume: Mutex::new(pending_resume),
@@ -1715,6 +1951,10 @@ pub fn run() {
             restart_as_administrator,
             resume_after_restart,
             get_workflow,
+            import_workflow,
+            export_workflow,
+            start_training,
+            pause_training,
             export_session,
             prepare_workflow,
             save_workflow,

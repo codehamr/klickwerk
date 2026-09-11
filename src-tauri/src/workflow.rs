@@ -1,6 +1,6 @@
-use crate::{action::Action, config::replace, guard::Frame};
+use crate::{action::Action, guard::Frame};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 pub const MAX_STEPS: usize = 1000;
 const STORE_LIMIT: usize = 16 * 1024 * 1024;
@@ -164,7 +164,7 @@ pub fn fallback_prompt(memory: &str, steps: &[Step], edited: &Learning) -> Learn
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Learning {
     pub name: String,
@@ -208,10 +208,75 @@ impl Workflow {
     }
 }
 
-#[derive(Serialize)]
-struct File {
-    version: u32,
-    workflows: Vec<Workflow>,
+pub const PORTABLE_LIMIT: usize = 64 * 1024;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableWorkflow {
+    pub format: String,
+    pub version: u32,
+    pub name: String,
+    pub prompt: String,
+}
+impl PortableWorkflow {
+    pub fn encode(learning: &Learning) -> Result<Vec<u8>, String> {
+        learning.validate()?;
+        serde_json::to_vec_pretty(&Self {
+            format: "klickwerk-workflow".into(),
+            version: 1,
+            name: learning.name.clone(),
+            prompt: learning.prompt.clone(),
+        })
+        .map_err(|_| "The workflow could not be encoded.".into())
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Learning, String> {
+        if bytes.len() > PORTABLE_LIMIT {
+            return Err("Workflow files must be smaller than 64 KiB.".into());
+        }
+        let file: Self = serde_json::from_slice(bytes)
+            .map_err(|_| "Choose a valid klickwerk workflow JSON file.".to_owned())?;
+        if file.version != 1 || file.format != "klickwerk-workflow" {
+            return Err("This workflow format is not supported.".into());
+        }
+        let learning = Learning {
+            name: file.name,
+            prompt: file.prompt,
+        };
+        learning.validate()?;
+        Ok(learning)
+    }
+}
+
+pub fn slug(name: &str) -> String {
+    let normalized = name
+        .to_lowercase()
+        .replace('ä', "ae")
+        .replace('ö', "oe")
+        .replace('ü', "ue")
+        .replace('ß', "ss");
+    let mut value = String::new();
+    for word in normalized
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .take(4)
+    {
+        if !value.is_empty() {
+            value.push('-');
+        }
+        value.extend(word.chars().take(16));
+    }
+    if value.is_empty() {
+        value = "workflow".into();
+    }
+    if [
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    ]
+    .contains(&value.as_str())
+    {
+        value.push_str("-workflow");
+    }
+    value
 }
 
 // Version 1 stored a separate memory and raw history. Read it without replaying or
@@ -236,49 +301,124 @@ pub struct WorkflowStore {
     pub error: Option<String>,
 }
 impl WorkflowStore {
-    pub fn load(path: PathBuf) -> Self {
-        let result = (|| {
+    // The legacy library is preserved. A staged directory migration is committed
+    // once, so deleted workflows cannot reappear from the old library on restart.
+    pub fn load(legacy: PathBuf) -> Self {
+        let path = legacy.with_file_name("workflows");
+        let result = (|| -> Result<Vec<Workflow>, String> {
             if !path.exists() {
-                return Ok(vec![]);
-            }
-            if fs::metadata(&path)
-                .map_err(|_| "Workflows could not be read.")?
-                .len()
-                > STORE_LIMIT as u64
-            {
-                return Err("workflows.json exceeds 16 MiB.".to_owned());
-            }
-            let file: StoredFile = serde_json::from_slice(
-                &fs::read(&path).map_err(|_| "Workflows could not be read.")?,
-            )
-            .map_err(|_| "workflows.json is damaged. The existing file has been preserved.")?;
-            if ![1, 2].contains(&file.version) || file.workflows.len() > 100 {
-                return Err("This workflow library is not supported.".to_owned());
-            }
-            let workflows: Vec<Workflow> = file
-                .workflows
-                .into_iter()
-                .map(|mut stored| {
-                    if !stored.memory.trim().is_empty() {
-                        stored.workflow.learning.prompt.push_str("\n\n");
-                        stored
-                            .workflow
-                            .learning
-                            .prompt
-                            .push_str(stored.memory.trim());
+                let mut migrated = vec![];
+                if legacy.exists() {
+                    if fs::metadata(&legacy)
+                        .map_err(|_| "Workflows could not be read.")?
+                        .len()
+                        > STORE_LIMIT as u64
+                    {
+                        return Err("workflows.json exceeds 16 MiB.".into());
                     }
-                    stored.workflow
-                })
-                .collect();
-            for (index, item) in workflows.iter().enumerate() {
-                item.learning.validate()?;
-                if item.id.is_empty()
-                    || item.id.len() > 100
-                    || workflows[..index].iter().any(|w| w.id == item.id)
+                    let file: StoredFile = serde_json::from_slice(
+                        &fs::read(&legacy).map_err(|_| "Workflows could not be read.")?,
+                    )
+                    .map_err(
+                        |_| "workflows.json is damaged. The existing file has been preserved.",
+                    )?;
+                    if ![1, 2].contains(&file.version) || file.workflows.len() > 100 {
+                        return Err("This workflow library is not supported.".into());
+                    }
+                    for mut stored in file.workflows {
+                        if !stored.memory.trim().is_empty() {
+                            stored.workflow.learning.prompt.push_str("\n\n");
+                            stored
+                                .workflow
+                                .learning
+                                .prompt
+                                .push_str(stored.memory.trim());
+                        }
+                        stored.workflow.learning.validate()?;
+                        migrated.push(stored.workflow.learning);
+                    }
+                }
+                let staging = legacy.with_file_name(format!(
+                    ".workflows-migration-{}-{}",
+                    std::process::id(),
+                    crate::session::timestamp()
+                ));
+                fs::create_dir(&staging).map_err(
+                    |_| "Workflows could not be saved beside the app. Check folder permissions.",
+                )?;
+                let result = (|| -> Result<(), String> {
+                    let mut store = Self {
+                        path: staging.clone(),
+                        workflows: vec![],
+                        error: None,
+                    };
+                    for learning in migrated {
+                        store.save(Workflow {
+                            id: String::new(),
+                            learning,
+                            updated_at: 0,
+                        })?;
+                    }
+                    fs::rename(&staging, &path)
+                        .map_err(|_| "The workflow folder could not be created.".into())
+                })();
+                if result.is_err() {
+                    let _ = fs::remove_dir_all(&staging);
+                }
+                result?;
+            }
+            if fs::symlink_metadata(&path)
+                .map_err(|_| "Workflows could not be read.")?
+                .file_type()
+                .is_symlink()
+            {
+                return Err("The workflow folder must not be a symbolic link.".into());
+            }
+            let mut workflows = vec![];
+            for entry in fs::read_dir(&path).map_err(|_| "Workflows could not be read.")? {
+                let entry = entry.map_err(|_| "Workflows could not be read.")?;
+                let filename = entry.file_name().to_string_lossy().into_owned();
+                if !filename.ends_with(".json") {
+                    continue;
+                }
+                let meta = entry
+                    .metadata()
+                    .map_err(|_| "Workflows could not be read.")?;
+                if entry
+                    .file_type()
+                    .map_err(|_| "Workflows could not be read.")?
+                    .is_symlink()
+                    || !meta.is_file()
                 {
-                    return Err("The workflow library contains invalid entries.".to_owned());
+                    return Err("Workflow files must be regular JSON files.".into());
+                }
+                if meta.len() > PORTABLE_LIMIT as u64 {
+                    return Err("Workflow files must be smaller than 64 KiB.".into());
+                }
+                let learning = PortableWorkflow::decode(
+                    &fs::read(entry.path()).map_err(|_| "Workflows could not be read.")?,
+                )?;
+                let id = filename.trim_end_matches(".json").to_owned();
+                validate_id(&id)?;
+                workflows.push(Workflow {
+                    id,
+                    learning,
+                    updated_at: meta
+                        .modified()
+                        .ok()
+                        .and_then(|v| v.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|v| v.as_millis() as u64)
+                        .unwrap_or(0),
+                });
+                if workflows.len() > 100 {
+                    return Err("This workflow library is not supported.".into());
                 }
             }
+            workflows.sort_by(|a, b| {
+                b.updated_at
+                    .cmp(&a.updated_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
             Ok(workflows)
         })();
         match result {
@@ -302,89 +442,210 @@ impl WorkflowStore {
             .ok_or("This workflow is no longer available.".into())
     }
     pub fn save(&mut self, mut item: Workflow) -> Result<Workflow, String> {
-        item.learning.name = item.learning.name.trim().into();
-        item.learning.prompt = item.learning.prompt.trim().into();
-        item.learning.validate()?;
-        if item.id.is_empty() || item.id.len() > 100 {
-            return Err("This workflow has an invalid identifier.".into());
-        }
-        item.updated_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        if let Some(current) = self.workflows.iter().find(|w| w.id == item.id) {
-            item.updated_at = item.updated_at.max(current.updated_at.saturating_add(1));
-        }
-        let mut next = self.workflows.clone();
-        if let Some(current) = next.iter_mut().find(|w| w.id == item.id) {
-            *current = item.clone();
-        } else {
-            next.push(item.clone());
-        }
-        self.persist(next)?;
-        Ok(item)
-    }
-    pub fn delete(&mut self, id: &str) -> Result<(), String> {
-        self.get(id)?;
-        self.persist(
-            self.workflows
-                .iter()
-                .filter(|w| w.id != id)
-                .cloned()
-                .collect(),
-        )
-    }
-    fn persist(&mut self, workflows: Vec<Workflow>) -> Result<(), String> {
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
-        if workflows.len() > 100 {
-            return Err("Your library is full. Remove a workflow before saving another.".into());
+        item.learning.name = item.learning.name.trim().into();
+        item.learning.prompt = item.learning.prompt.trim().into();
+        item.learning.validate()?;
+        let updating = self.workflows.iter().any(|w| w.id == item.id);
+        if !updating {
+            if self.workflows.len() >= 100 {
+                return Err(
+                    "Your library is full. Remove a workflow before saving another.".into(),
+                );
+            }
+            let base = slug(&item.learning.name);
+            item.id = base.clone();
+            let mut suffix = 2;
+            while self.path.join(format!("{}.json", item.id)).exists() {
+                item.id = format!("{base}-{suffix}");
+                suffix += 1;
+            }
         }
-        let bytes = serde_json::to_vec_pretty(&File {
-            version: 2,
-            workflows: workflows.clone(),
-        })
-        .map_err(|_| "Workflows could not be encoded.")?;
-        if bytes.len() > STORE_LIMIT {
-            return Err(
-                "The workflow library exceeds 16 MiB. Remove an older workflow first.".into(),
-            );
-        }
-        let temp = self.path.with_file_name(format!(
-            ".workflows-{}-{}.tmp",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let result = (|| {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-                .map_err(
-                    |_| "Workflows could not be saved beside the app. Check folder permissions.",
+        validate_id(&item.id)?;
+        let path = self.path.join(format!("{}.json", item.id));
+        let bytes = PortableWorkflow::encode(&item.learning)?;
+        if updating {
+            // Never replace an externally modified file or a redirected path.
+            let current = self.get(&item.id)?;
+            let meta = fs::symlink_metadata(&path)
+                .map_err(|_| "This workflow changed. Open it again before saving.")?;
+            if !meta.is_file()
+                || fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| PortableWorkflow::decode(&bytes).ok())
+                    != Some(current.learning)
+            {
+                return Err("This workflow changed. Open it again before saving.".into());
+            }
+            crate::session::write_report(&path, &bytes)?;
+        } else {
+            // Publish a completed file without replacing a file another process
+            // created after the name was suggested.
+            let temporary = self.path.join(format!(
+                ".workflow-{}-{}.tmp",
+                std::process::id(),
+                crate::session::timestamp()
+            ));
+            let result = (|| -> Result<(), String> {
+                use std::io::Write;
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)
+                    .map_err(|_| "Workflows could not be saved.")?;
+                file.write_all(&bytes)
+                    .and_then(|_| file.sync_all())
+                    .map_err(|_| "Workflows could not be saved.")?;
+                drop(file);
+                publish_new(&temporary, &path).map_err(
+                    |_| "Workflows could not be saved. Check the folder permissions and filename.",
                 )?;
-            file.write_all(&bytes)
-                .and_then(|_| file.sync_all())
-                .map_err(|_| "Workflows could not be saved.")?;
-            drop(file);
-            replace(&temp, &self.path).map_err(|_| "workflows.json could not be replaced.")
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
+                Ok(())
+            })();
+            let _ = fs::remove_file(temporary);
+            result?;
         }
-        result?;
-        self.workflows = workflows;
+        item.updated_at = crate::session::timestamp().max(
+            self.workflows
+                .iter()
+                .find(|w| w.id == item.id)
+                .map(|w| w.updated_at.saturating_add(1))
+                .unwrap_or(0),
+        );
+        self.workflows.retain(|w| w.id != item.id);
+        self.workflows.insert(0, item.clone());
+        Ok(item)
+    }
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        self.get(id)?;
+        validate_id(id)?;
+        fs::remove_file(self.path.join(format!("{id}.json")))
+            .map_err(|_| "The workflow could not be deleted.")?;
+        self.workflows.retain(|w| w.id != id);
         Ok(())
     }
+}
+// MOVEFILE_REPLACE_EXISTING is deliberately absent. This also supports FAT/exFAT
+// portable drives, which do not support hard links.
+#[cfg(windows)]
+fn publish_new(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+#[cfg(not(windows))]
+fn publish_new(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    fs::hard_link(source, target)
+}
+
+fn validate_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 240
+        || id.contains(['/', '\\', ':', '.'])
+        || id.chars().any(|c| c.is_control())
+    {
+        return Err("This workflow has an invalid identifier.".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn portable_import_is_strict_and_filenames_are_short_safe_and_unique() {
+        let learning = Learning {
+            name: "März / Bericht".into(),
+            prompt: "Write Grüße 世界".into(),
+        };
+        let bytes = PortableWorkflow::encode(&learning).unwrap();
+        assert_eq!(PortableWorkflow::decode(&bytes).unwrap(), learning);
+        assert_eq!(slug(&learning.name), "maerz-bericht");
+        assert_eq!(slug("../CON"), "con-workflow");
+        assert_eq!(slug("../../"), "workflow");
+        for invalid in [
+            r#"{"format":"klickwerk-workflow","version":2,"name":"Test","prompt":"Task"}"#,
+            r#"{"format":"klickwerk-workflow","version":1,"name":"Test","prompt":"Task","path":"../evil"}"#,
+            r#"{"format":"klickwerk-workflow","version":1,"name":"Test","prompt":""}"#,
+        ] {
+            assert!(PortableWorkflow::decode(invalid.as_bytes()).is_err());
+        }
+        assert!(PortableWorkflow::decode(&vec![b'a'; PORTABLE_LIMIT + 1]).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = WorkflowStore::load(dir.path().join("workflows.json"));
+        let item = Workflow {
+            id: "../../escape".into(),
+            learning,
+            updated_at: 0,
+        };
+        let first = store.save(item.clone()).unwrap();
+        let second = store.save(item).unwrap();
+        assert_eq!(first.id, "maerz-bericht");
+        assert_eq!(second.id, "maerz-bericht-2");
+        assert!(!dir.path().join("escape.json").exists());
+        let saved = fs::read(store.path.join("maerz-bericht.json")).unwrap();
+        assert_eq!(saved, bytes);
+        store.delete(&first.id).unwrap();
+        assert_eq!(
+            WorkflowStore::load(dir.path().join("workflows.json"))
+                .workflows
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn external_changes_and_damaged_files_are_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("workflows.json");
+        let mut store = WorkflowStore::load(legacy.clone());
+        let saved = store
+            .save(Workflow {
+                id: "".into(),
+                learning: Learning {
+                    name: "Note".into(),
+                    prompt: "Original".into(),
+                },
+                updated_at: 0,
+            })
+            .unwrap();
+        fs::write(store.path.join("note.json"), "external change").unwrap();
+        assert!(store.save(saved).is_err());
+        let mut reloaded = WorkflowStore::load(legacy);
+        assert!(reloaded.error.is_some());
+        assert!(reloaded.delete("note").is_err());
+        assert_eq!(
+            fs::read_to_string(store.path.join("note.json")).unwrap(),
+            "external change"
+        );
+    }
+    #[test]
+    fn migration_does_not_resurrect_deleted_entries_or_modify_legacy_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("workflows.json");
+        let old = r#"{"version":2,"workflows":[{"id":"old","name":"Note","prompt":"Write a note","updated_at":1}]}"#;
+        fs::write(&legacy, old).unwrap();
+        let mut store = WorkflowStore::load(legacy.clone());
+        store.delete("note").unwrap();
+        assert!(WorkflowStore::load(legacy.clone()).workflows.is_empty());
+        assert_eq!(fs::read_to_string(legacy).unwrap(), old);
+    }
     #[test]
     fn saved_corrections_remain_in_history_and_are_not_duplicated_on_continue() {
         let mut steps = vec![];
@@ -426,10 +687,10 @@ mod tests {
             },
             updated_at: 0,
         };
-        store.save(workflow).unwrap();
+        let saved = store.save(workflow).unwrap();
         let mut loaded = WorkflowStore::load(path.clone());
-        let mut edited = loaded.get("one").unwrap();
-        let contents = fs::read_to_string(&path).unwrap();
+        let mut edited = loaded.get(&saved.id).unwrap();
+        let contents = fs::read_to_string(store.path.join(format!("{}.json", saved.id))).unwrap();
         assert!(!contents.contains("steps"));
         assert!(!contents.contains("memory"));
         assert!(!contents.contains("desktop_points"));
@@ -437,13 +698,13 @@ mod tests {
         loaded.save(edited).unwrap();
         assert_eq!(
             WorkflowStore::load(path.clone())
-                .get("one")
+                .get(&saved.id)
                 .unwrap()
                 .learning
                 .prompt,
             "An edited warm start"
         );
-        loaded.delete("one").unwrap();
+        loaded.delete(&saved.id).unwrap();
         assert!(WorkflowStore::load(path).workflows.is_empty());
     }
     #[test]
@@ -453,13 +714,14 @@ mod tests {
         fs::write(&path, r#"{"version":1,"workflows":[{"id":"old","name":"Note","prompt":"Write a note","memory":"Verify the folder","task":"Original task","steps":[{"description":"raw history"}],"updated_at":1}]}"#).unwrap();
         let mut store = WorkflowStore::load(path.clone());
         assert!(store.error.is_none());
-        let workflow = store.get("old").unwrap();
+        let workflow = store.get("note").unwrap();
         assert_eq!(
             workflow.learning.prompt,
             "Write a note\n\nVerify the folder"
         );
         store.save(workflow).unwrap();
-        let contents = fs::read_to_string(path).unwrap();
+        let contents = fs::read_to_string(store.path.join("note.json")).unwrap();
+        assert!(fs::read_to_string(path).unwrap().contains("raw history"));
         assert!(!contents.contains("raw history"));
         assert!(!contents.contains("memory"));
         assert!(contents.contains("Verify the folder"));
@@ -493,7 +755,7 @@ mod tests {
         let path = dir.path().join("workflows.json");
         fs::write(&path, "broken").unwrap();
         let mut store = WorkflowStore::load(path.clone());
-        assert!(store.persist(vec![]).is_err());
+        assert!(store.delete("missing").is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "broken");
     }
 }

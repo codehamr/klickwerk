@@ -1,14 +1,24 @@
 import { useI18n } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, BookOpen, LoaderCircle, Save, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  BookOpen,
+  LoaderCircle,
+  Save,
+  Trash2,
+  Download,
+} from "lucide-react";
 import { api, native } from "../lib/bridge";
 import type { Learning, Run, Workflow, WorkflowDraft } from "../lib/types";
+import { workflowSlug } from "../lib/workflows";
 import { errorText } from "../lib/utils";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 
 export type WorkflowSource =
-  { run: Run; correction: string; name?: string } | { workflowId: string };
+  | { run: Run; correction: string; name?: string; reviewTraining?: boolean }
+  | { workflowId: string }
+  | { prompt: string; name?: string; imported?: boolean };
 export function WorkflowDialog({
   source,
   onClose,
@@ -31,12 +41,23 @@ export function WorkflowDialog({
           prompt: source.run.task,
           updated_at: 0,
         }
-      : null,
+      : "prompt" in source
+        ? {
+            id: "",
+            name:
+              source.name ?? source.prompt.split(/\s+/).slice(0, 3).join(" "),
+            prompt: source.prompt,
+            updated_at: 0,
+          }
+        : null,
   );
   const [busy, setBusy] = useState<"learning" | "saving" | "deleting" | null>(
     null,
   );
   const [error, setError] = useState("");
+  const [reviewed, setReviewed] = useState<WorkflowDraft | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
   const [fallback, setFallback] = useState<WorkflowDraft | null>(null);
   const [retry, setRetry] = useState(0);
   const [deleting, setDeleting] = useState(false);
@@ -64,6 +85,57 @@ export function WorkflowDialog({
       if (request.current) void api.cancelRequest(request.current);
     };
   }, [source, retry]);
+  useEffect(() => {
+    if (!("run" in source) || !source.reviewTraining) return;
+    let alive = true;
+    const requestId = crypto.randomUUID();
+    request.current = requestId;
+    setBusy("learning");
+    void api
+      .prepareWorkflow(
+        { name: source.name ?? t("My workflow"), prompt: source.run.task },
+        requestId,
+        source.run.id,
+        source.correction,
+      )
+      .then((draft) => {
+        if (!alive) return;
+        if (draft.warning) {
+          setFallback(draft);
+          setError(draft.warning);
+        } else {
+          setWorkflow(draft.workflow);
+          setReviewed(draft);
+        }
+      })
+      .catch((error) => {
+        if (alive) setError(errorText(error));
+      })
+      .finally(() => {
+        if (alive) {
+          request.current = "";
+          setBusy(null);
+        }
+      });
+    return () => {
+      alive = false;
+      request.current = "";
+      void api.cancelRequest(requestId);
+    };
+  }, [source, t]);
+  async function exportSaved() {
+    if (!workflow || exporting) return;
+    setExporting(true);
+    setError("");
+    try {
+      if (await api.exportWorkflow(workflow.id))
+        setExportNotice(t("Workflow exported."));
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setExporting(false);
+    }
+  }
   const edited =
     !original ||
     original.name !== workflow?.name ||
@@ -75,34 +147,46 @@ export function WorkflowDialog({
   async function save(use = false) {
     if (!workflow || saving.current) return;
     saving.current = true;
-    setBusy("learning");
+    const consolidate = !("prompt" in source) && !reviewed;
+    setBusy(consolidate ? "learning" : "saving");
     setError("");
     setFallback(null);
     const requestId = crypto.randomUUID();
     request.current = requestId;
     try {
-      const draft = await api.prepareWorkflow(
-        { name: workflow.name, prompt: workflow.prompt },
-        requestId,
-        "run" in source ? source.run.id : undefined,
-        "run" in source ? source.correction : undefined,
-        "workflowId" in source ? source.workflowId : undefined,
-      );
+      const draft =
+        reviewed ??
+        (await api.prepareWorkflow(
+          { name: workflow.name, prompt: workflow.prompt },
+          requestId,
+          "run" in source ? source.run.id : undefined,
+          "run" in source ? source.correction : undefined,
+          "workflowId" in source ? source.workflowId : undefined,
+          consolidate,
+        ));
       if (request.current !== requestId) return;
       if (draft.warning) {
         setFallback(draft);
         setError(draft.warning);
         return;
       }
+      if ("run" in source && source.reviewTraining && !reviewed) {
+        setWorkflow(draft.workflow);
+        setReviewed(draft);
+        return;
+      }
       setBusy("saving");
-      const saved = await api.saveWorkflow(draft.token);
+      const saved = await api.saveWorkflow(
+        draft.token,
+        reviewed ? { name: workflow.name, prompt: workflow.prompt } : undefined,
+      );
       if (use) await onUse(saved);
-      onSaved(saved, true);
+      onSaved(saved, consolidate || !!reviewed);
       onClose();
     } catch (error) {
       if (request.current === requestId) setError(errorText(error));
     } finally {
-      request.current = "";
+      if (request.current === requestId) request.current = "";
       saving.current = false;
       setBusy(null);
     }
@@ -151,11 +235,11 @@ export function WorkflowDialog({
       }}
     >
       <DialogContent
-        title={
-          "workflowId" in source ? t("Your workflow") : t("Learn for next time")
-        }
+        title={"workflowId" in source ? t("Your workflow") : t("Save workflow")}
         description={t(
-          "One start prompt. Everything useful from this session built in.",
+          reviewed
+            ? "Your example is now a reusable prompt. Adjust anything before saving."
+            : "One start prompt. Everything useful from this session built in.",
         )}
       >
         <div className="settings-body workflow-body" aria-busy={!!busy}>
@@ -193,12 +277,23 @@ export function WorkflowDialog({
                   value={workflow.name}
                   onChange={(e) => edit("name", e.target.value)}
                 />
+                <p className="field-hint workflow-filename">
+                  {t("File")}: workflows/
+                  {"workflowId" in source
+                    ? source.workflowId
+                    : "run" in source && source.run.workflow_id
+                      ? source.run.workflow_id
+                      : workflowSlug(workflow.name)}
+                  .json
+                </p>
               </div>
               <div className="field">
                 <label htmlFor="workflow-prompt">{t("Start prompt")}</label>
                 <p className="field-hint">
                   {t(
-                    "Edit the goal and preferences. Saving consolidates everything into this prompt.",
+                    reviewed || "prompt" in source
+                      ? "This is what the agent will use next time. Saving does not start the task."
+                      : "Edit the goal and preferences. Saving consolidates everything into this prompt.",
                   )}
                 </p>
                 <textarea
@@ -226,6 +321,25 @@ export function WorkflowDialog({
                     )}
               </p>
             </>
+          )}
+          {"run" in source &&
+            source.run.training?.stop_reason &&
+            source.run.training.stop_reason !== "Demonstration recorded." && (
+              <p className="notice notice-info">
+                {t(source.run.training.stop_reason)}
+              </p>
+            )}
+          {exportNotice && (
+            <p className="notice notice-success" role="status">
+              {exportNotice}
+            </p>
+          )}
+          {"prompt" in source && source.imported && (
+            <p className="notice notice-info">
+              {t(
+                "Review this imported prompt before saving. It will be added as a separate workflow.",
+              )}
+            </p>
           )}
           {error && (
             <div className="notice notice-error" role="alert">
@@ -290,6 +404,16 @@ export function WorkflowDialog({
               {t("Cancel")}
             </Button>
           )}
+          {"workflowId" in source && (
+            <Button
+              variant="ghost"
+              disabled={!!busy || !workflow || exporting || edited}
+              onClick={() => void exportSaved()}
+            >
+              <Download size={16} />
+              {t("Export workflow")}
+            </Button>
+          )}
           <span className="footer-spacer" />
           <Button
             variant={"workflowId" in source ? "secondary" : "default"}
@@ -308,9 +432,11 @@ export function WorkflowDialog({
             )}
             {busy
               ? t("Saving…")
-              : workflow?.id
-                ? t("Learn & update")
-                : t("Learn & save")}
+              : reviewed || "prompt" in source
+                ? t("Save workflow")
+                : workflow?.id
+                  ? t("Learn & update")
+                  : t("Learn & save")}
           </Button>
           {"workflowId" in source && (
             <Button

@@ -8,6 +8,7 @@ import type {
   WorkflowDraft,
   Learning,
   SpeechUpdate,
+  TrainingOptions,
 } from "./types";
 
 export const native = isTauri();
@@ -69,6 +70,7 @@ export const api = {
     runId?: number,
     correction?: string,
     id?: string,
+    consolidate = true,
   ) =>
     call<WorkflowDraft>("prepare_workflow", {
       learning,
@@ -76,8 +78,29 @@ export const api = {
       runId: runId ?? null,
       correction: correction || null,
       id: id ?? null,
+      consolidate,
     }),
-  saveWorkflow: (token: string) => call<Workflow>("save_workflow", { token }),
+  saveWorkflow: (token: string, learning?: Learning) =>
+    call<Workflow>("save_workflow", { token, learning: learning ?? null }),
+  importWorkflow: (contents: string) =>
+    call<Learning>("import_workflow", { contents }),
+  exportWorkflow: (id: string) =>
+    call<string | null>("export_workflow", { id }),
+  startTraining: (
+    task: string,
+    options: TrainingOptions,
+    runId?: number,
+    workflowId?: string,
+    correction?: string,
+  ) =>
+    call<void>("start_training", {
+      task,
+      options,
+      runId: runId ?? null,
+      workflowId: workflowId ?? null,
+      correction: correction || null,
+    }),
+  pauseTraining: (paused: boolean) => call<void>("pause_training", { paused }),
   reset: () => call<void>("reset_session"),
   deleteWorkflow: (id: string) => call<void>("delete_workflow", { id }),
   stop: () => call<void>("stop_task"),
