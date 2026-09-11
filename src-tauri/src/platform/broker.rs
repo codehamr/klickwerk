@@ -3,11 +3,12 @@ use super::{
     input::{HeldInput, INPUT_TAG, Plan},
     now, wide,
 };
-use crate::guard::{Command, Gate, Reply};
+use crate::guard::{COUNTDOWN_MS, Command, Gate, PointerGuard, Reply, keyboard_can_interrupt};
 use std::{
+    cell::Cell,
     io::{BufRead, Read, Write},
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
     },
     time::Duration,
@@ -21,8 +22,32 @@ use windows_sys::Win32::{
 static STOP: AtomicBool = AtomicBool::new(false);
 static ARMED: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
-static POINTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "safety-tests")]
+pub(crate) const FIXTURE_KEYBOARD_EVENT: u32 = WM_APP + 71;
+thread_local! {
+    static POINTER: Cell<PointerGuard> = const { Cell::new(PointerGuard::new((0, 0))) };
+    static INTERRUPTION: Cell<Option<crate::diagnostics::InputInterruption>> = const { Cell::new(None) };
+    static LAST_AGENT_INPUT: Cell<Option<u64>> = const { Cell::new(None) };
+}
 static REASON: AtomicU32 = AtomicU32::new(0);
+
+fn interrupt(event: u32, flags: u32, position: Option<[i32; 2]>, anchor: Option<[i32; 2]>) {
+    let detected_ms = now();
+    INTERRUPTION.with(|state| {
+        if state.get().is_none() {
+            state.set(Some(crate::diagnostics::InputInterruption {
+                event,
+                flags,
+                detected_ms,
+                position,
+                anchor,
+                since_agent_input_ms: LAST_AGENT_INPUT
+                    .with(|last| last.get().map(|time| detected_ms.saturating_sub(time))),
+            }));
+        }
+    });
+    latch(3);
+}
 
 fn latch(reason: u32) {
     REASON
@@ -41,27 +66,34 @@ fn reason() -> &'static str {
     }
 }
 
+fn keyboard_event(wparam: WPARAM, event: &KBDLLHOOKSTRUCT) -> bool {
+    let own_input = event.dwExtraInfo == INPUT_TAG;
+    if own_input {
+        LAST_AGENT_INPUT.with(|state| state.set(Some(now())));
+    }
+    if STOP.load(Ordering::SeqCst) && own_input && event.flags & LLKHF_UP == 0 {
+        return true;
+    }
+    if keyboard_can_interrupt(
+        event.flags,
+        own_input,
+        ARMED.load(Ordering::SeqCst),
+        RUNNING.load(Ordering::SeqCst),
+    ) {
+        #[cfg(feature = "safety-tests")]
+        eprintln!(
+            "Takeover event: kind={wparam} flags={} tag={}",
+            event.flags, event.dwExtraInfo
+        );
+        interrupt(wparam as u32, event.flags, None, None);
+    }
+    false
+}
+
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        if code >= 0 {
-            let event = &*(lparam as *const KBDLLHOOKSTRUCT);
-            if STOP.load(Ordering::SeqCst)
-                && event.dwExtraInfo == INPUT_TAG
-                && event.flags & LLKHF_UP == 0
-            {
-                return 1;
-            }
-            if event.dwExtraInfo != INPUT_TAG
-                && (RUNNING.load(Ordering::SeqCst) || event.flags & LLKHF_UP == 0)
-                && ARMED.load(Ordering::SeqCst)
-            {
-                #[cfg(feature = "safety-tests")]
-                eprintln!(
-                    "Takeover event: kind={wparam} flags={} tag={}",
-                    event.flags, event.dwExtraInfo
-                );
-                latch(3);
-            }
+        if code >= 0 && keyboard_event(wparam, &*(lparam as *const KBDLLHOOKSTRUCT)) {
+            return 1;
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
@@ -70,24 +102,47 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
     unsafe {
         if code >= 0 {
             let event = &*(lparam as *const MSLLHOOKSTRUCT);
-            let position = ((event.pt.x as u32 as u64) << 32) | event.pt.y as u32 as u64;
-            let previous = POINTER.swap(position, Ordering::SeqCst);
-            // Windows may echo a cursor-position update without its injection tag.
-            // A duplicate position is not movement; buttons and wheels always count.
-            let moved = wparam as u32 != WM_MOUSEMOVE || previous != position;
+            if event.dwExtraInfo == INPUT_TAG {
+                LAST_AGENT_INPUT.with(|state| state.set(Some(now())));
+            }
+            let monitoring = ARMED.load(Ordering::SeqCst);
+            let anchor = POINTER.with(|state| state.get().anchor);
+            let moved = POINTER.with(|state| {
+                let mut pointer = state.get();
+                let moved = pointer.observe(
+                    (event.pt.x, event.pt.y),
+                    event.dwExtraInfo == INPUT_TAG,
+                    monitoring,
+                );
+                state.set(pointer);
+                moved
+            });
+            #[cfg(feature = "safety-tests")]
+            eprintln!(
+                "Pointer sample: event={wparam} tag={} position=({}, {}) anchor={anchor:?} monitoring={monitoring} beyond_tolerance={moved}",
+                event.dwExtraInfo, event.pt.x, event.pt.y
+            );
             if STOP.load(Ordering::SeqCst)
                 && event.dwExtraInfo == INPUT_TAG
                 && !matches!(wparam as u32, WM_LBUTTONUP | WM_RBUTTONUP)
             {
                 return 1;
             }
-            if event.dwExtraInfo != INPUT_TAG && moved && ARMED.load(Ordering::SeqCst) {
+            if event.dwExtraInfo != INPUT_TAG
+                && monitoring
+                && (wparam as u32 != WM_MOUSEMOVE || moved)
+            {
                 #[cfg(feature = "safety-tests")]
                 eprintln!(
                     "Mouse takeover: kind={wparam} flags={} tag={}",
                     event.flags, event.dwExtraInfo
                 );
-                latch(3);
+                interrupt(
+                    wparam as u32,
+                    event.flags,
+                    Some([event.pt.x, event.pt.y]),
+                    Some([anchor.0, anchor.1]),
+                );
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -102,6 +157,20 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     unsafe {
         match message {
+            #[cfg(feature = "safety-tests")]
+            FIXTURE_KEYBOARD_EVENT => {
+                // SendInput always marks keys as injected. Exercise the same
+                // handler with hardware flags only in the isolated test binary.
+                keyboard_event(
+                    WM_KEYDOWN as usize,
+                    &KBDLLHOOKSTRUCT {
+                        vkCode: VK_SHIFT as u32,
+                        flags: wparam as u32,
+                        ..std::mem::zeroed()
+                    },
+                );
+                1
+            }
             WM_CLOSE => {
                 latch(4);
                 0
@@ -197,10 +266,7 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
         }
         let mut pointer: POINT = std::mem::zeroed();
         GetCursorPos(&mut pointer);
-        POINTER.store(
-            ((pointer.x as u32 as u64) << 32) | pointer.y as u32 as u64,
-            Ordering::SeqCst,
-        );
+        POINTER.with(|state| state.set(PointerGuard::new((pointer.x, pointer.y))));
         let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0);
         let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), instance, 0);
         if keyboard.is_null() || mouse.is_null() {
@@ -250,7 +316,6 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
         let started = now();
         let mut gate = Gate::new(started);
         let mut plan: Option<(u64, Plan, u64)> = None;
-        ARMED.store(true, Ordering::SeqCst);
         if !reply(&Reply::Ready { bounds: [0; 4] }) {
             latch(4);
         }
@@ -265,6 +330,11 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
                 DispatchMessageW(&message);
             }
             let clock = now();
+            // Drain startup input before enabling takeover. Stop, connection and
+            // desktop checks remain active throughout the countdown.
+            if clock.saturating_sub(started) >= COUNTDOWN_MS {
+                ARMED.store(true, Ordering::SeqCst);
+            }
             if STOP.load(Ordering::SeqCst) {
                 break;
             }
@@ -330,7 +400,7 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
             }
             if !gate.armed {
                 let all_released = (1..256).all(|key| GetAsyncKeyState(key) >= 0);
-                if clock - started >= 2000 && all_released {
+                if clock - started >= COUNTDOWN_MS && all_released {
                     gate.armed = true;
                     RUNNING.store(true, Ordering::SeqCst);
                     if !reply(&Reply::Armed) {
@@ -403,6 +473,11 @@ fn run(parent_id: u32, mapping: &str, simulate: bool) -> Result<(), String> {
         held.release();
         reply(&Reply::Stopped {
             reason: reason().into(),
+            interruption: if REASON.load(Ordering::SeqCst) == 3 {
+                INTERRUPTION.with(Cell::get)
+            } else {
+                None
+            },
         });
         WTSUnRegisterSessionNotification(window);
         UnhookWindowsHookEx(keyboard);

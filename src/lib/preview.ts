@@ -200,7 +200,7 @@ export async function previewCall<T>(
         started_at: resume ? previous.started_at : Date.now(),
         attempts: resume ? previous.attempts : [],
         message:
-          "Starting in 2 seconds. Move your mouse or press any key to interrupt.",
+          "Starting in 2 seconds. Input interruption begins after the countdown.",
       };
       const currentSettings = state.settings;
       state.run.attempts.push({

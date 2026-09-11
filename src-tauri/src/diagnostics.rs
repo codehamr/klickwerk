@@ -232,6 +232,19 @@ pub struct Handoff {
     pub minimized: bool,
     pub focused: bool,
     pub attachment_error: Option<u32>,
+    #[serde(default)]
+    pub topmost_retained: bool,
+}
+
+// Record the interruption trigger without keyboard codes, text or key state.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct InputInterruption {
+    pub event: u32,
+    pub flags: u32,
+    pub detected_ms: u64,
+    pub since_agent_input_ms: Option<u64>,
+    pub position: Option<[i32; 2]>,
+    pub anchor: Option<[i32; 2]>,
 }
 
 #[cfg(test)]

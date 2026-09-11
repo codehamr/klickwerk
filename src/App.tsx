@@ -60,10 +60,12 @@ export function App() {
   const receivedUpdate = useRef(false);
   const stopPending = useRef(false);
   const resumedRun = useRef<number | null>(null);
+  const pointerPosition = useRef<[number, number] | null>(null);
   const run = snapshot?.run;
   const recovering = run?.phase === "recovering";
   const pendingResume = snapshot?.pending_resume_run_id;
   const active = !!run && activePhases.includes(run.phase);
+  const takeoverEnabled = run?.phase === "running";
   const current = !!run && run.phase !== "idle" && run.id !== dismissedRun;
   const refining =
     current &&
@@ -154,10 +156,36 @@ export function App() {
     };
   }, [recovering, pendingResume]);
   useEffect(() => {
-    if (native || !active || recovering) return;
+    if (native) return;
+    function trackPointer(event: PointerEvent) {
+      pointerPosition.current = [event.clientX, event.clientY];
+    }
+    window.addEventListener("pointermove", trackPointer, {
+      capture: true,
+      passive: true,
+    });
+    return () => window.removeEventListener("pointermove", trackPointer, true);
+  }, []);
+  useEffect(() => {
+    if (native || !takeoverEnabled) return;
+    let anchor = pointerPosition.current;
     function takeover(event: Event) {
       if (!event.isTrusted || stopPending.current) return;
       if (event.type === "keydown" && (event as KeyboardEvent).repeat) return;
+      if (event.type === "pointermove") {
+        const pointer = event as PointerEvent;
+        if (!anchor) {
+          anchor = [pointer.clientX, pointer.clientY];
+          return;
+        }
+        if (
+          Math.hypot(
+            pointer.clientX - anchor[0],
+            pointer.clientY - anchor[1],
+          ) <= 100
+        )
+          return;
+      }
       stopPending.current = true;
       if (event.cancelable) event.preventDefault();
       void api.stop().catch((error) => {
@@ -176,7 +204,7 @@ export function App() {
       events.forEach((event) =>
         window.removeEventListener(event, takeover, true),
       );
-  }, [active, recovering]);
+  }, [takeoverEnabled]);
   useEffect(() => {
     if (snapshot?.settings.language && snapshot?.locale)
       setLanguage(snapshot.settings.language, snapshot.locale);
@@ -453,7 +481,11 @@ export function App() {
                       "Your task continues after Windows permission is approved.",
                     )
                   : active
-                    ? t("Move your mouse or press any key to take over.")
+                    ? t(
+                        takeoverEnabled
+                          ? "Move the mouse deliberately, click, scroll, or press a key to interrupt."
+                          : "Use Stop to cancel startup.",
+                      )
                     : t(
                         "Describe the outcome. I’ll handle the clicks and typing.",
                       )}
@@ -591,7 +623,9 @@ export function App() {
                   {t(
                     recovering
                       ? "Use Stop to cancel continuation."
-                      : "Move your mouse or press any key to interrupt.",
+                      : !takeoverEnabled
+                        ? "Use Stop to cancel startup."
+                        : "Move the mouse deliberately, click, scroll, or press a key to interrupt.",
                   )}
                 </span>
               </div>
@@ -703,7 +737,7 @@ export function App() {
               {t(
                 recovering
                   ? "Use Stop to cancel continuation."
-                  : "Move your mouse or type to take over. Anytime.",
+                  : "Once running, move the mouse deliberately, click, or type to take over.",
               )}
             </span>
             {!active && (

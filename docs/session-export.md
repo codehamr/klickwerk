@@ -23,6 +23,7 @@ session has no old action history to export.
 | `run` | Original task, session ID, current outcome, message, question/result, duration, start time, workflow association, steps and attempts |
 | `run.steps` | Every recorded step in order, with actor, description, action and its arguments, status, elapsed time, image dimensions and desktop coordinates |
 | `run.recovery` | Current structured privilege block, including sender/target integrity; cleared when continuing or after a successful administrator restart |
+| `run.attempts[].interruption` | Optional interruption event/flags/time, time since tagged agent input, pointer position and anchor; no keyboard codes or typed text |
 | `run.recovery_events` | Timestamped privilege blocks, automatic/manual consent requests, failed/cancelled launches with Windows error codes, successful transfer/restoration and automatic/manual continuation |
 | `run.attempts` | Every initial start and continuation, with timestamps, step range, user reply, outcome, model/server configuration and warm-start prompt used at that time |
 | `workflow` | Associated workflow and its current consolidated prompt, or `null` |
@@ -84,6 +85,86 @@ input permission decision. Higher-integrity input triggers one native Windows co
 integrity can resolve it. Approval restores and continues the task; rejection
 leaves it paused with manual recovery available. The model cannot operate UAC or
 request arbitrary elevated commands, and the app does not change Windows policy.
+
+## Injected keyboard regression
+
+The next export (`started_at: 1789115766569`, revision `2026-09-input-handoff-v6`)
+identifies the previously unknown trigger. The search-field click completed at
+monotonic time `99468015`. The interruption has the same timestamp, event 256
+(`WM_KEYDOWN`), flags 16 (`LLKHF_INJECTED`), no mouse position and
+`since_agent_input_ms: 0`. Both processes already have High integrity. The handoff
+succeeds and keeps the app topmost. No filter text or sorting was attempted.
+
+This is a software-injected keyboard event, not evidence of a physical key press.
+The export cannot identify the injecting process or key. Increasing the pointer
+tolerance could not address this trigger. Revision `2026-09-injected-keyboard-v7`
+excludes Windows-marked injected keyboard events from takeover detection regardless
+of their extra-info tag or time since the agent's last input. It still passes them
+to the rest of the hook chain and target app. Non-injected keyboard events retain
+immediate takeover, including during clicks and typing. Countdown grace, 100-pixel
+mouse tolerance, explicit Stop and foreground handoff remain in effect.
+
+The native regression sends an untagged injected key immediately after tagged
+agent input, and again after a real broker click into the disposable editor.
+The old controller stops; the corrected controller accepts subsequent text input.
+The fixture separately simulates non-injected input at the event-handler boundary
+to verify immediate stopping and input release. It does not emulate a keyboard
+driver or establish live Windows 11 Task Manager completion.
+
+## Input interruption and foreground follow-up
+
+The next schema 3 export (`started_at: 1789112714924`, revision
+`2026-09-desktop-shortcuts-v5`) confirms a completed Task Manager launch and a
+successful automatic administrator restart. Steps 5 and 6 click Processes and the
+search field with equal High integrity. The terminal screenshot shows the focused
+search field, still empty. The run stops about 31 ms after the search click with
+the generic mouse/keyboard takeover reason; no filter text or sort was attempted.
+The report does not identify the event, so physical input cannot be distinguished
+from a small cursor movement or an untagged OS echo. The first handoff also shows
+an activation denial (`focused: false`, attachment error 5).
+
+Revision `2026-09-input-handoff-v6` ignores input interruption during the two-second
+countdown, tolerates pointer movement within a 100-pixel radius afterward, and
+keeps clicks, scrolling and keyboard input immediate. `attempts[].interruption`
+now records the actual event type/flags and timing; mouse events include physical
+position and the fixed movement anchor. Keyboard codes and typed content are not
+retained. Event values distinguish movement (512), button presses (for example
+513 for left down), wheel (522), and key down/up (256/257 or 260/261). Flags retain
+Windows injection information without treating external injected input as trusted.
+
+Every terminal handoff restores and temporarily raises the app above other windows,
+with bounded activation retries. `handoff.topmost_retained` identifies temporary
+topmost state, which clears when the user leaves the app or starts another run.
+Visibility and keyboard focus remain separate reported facts, including when
+Windows denies activation. The latest run does not establish filter/sort completion.
+
+## Desktop shortcut validation regression
+
+The September 11 schema 3 export (`started_at: 1789111836474`) records two physical
+takeovers during startup, followed by three correctly parsed Ctrl+Shift+Escape
+decisions at steps 5, 7 and 9. All three were skipped with `observation_changed`;
+none reached the input broker. The native foreground and focused control stayed
+`10507192` (Code.exe), no editable region was identified, and both sender and target
+had Medium integrity (8192). Each observation reached its five-second deadline on
+a changing desktop. Retained screenshots show a video preview among the background
+windows and no Task Manager. After three refusals the controller asked the user
+to stabilize the target. Filtering, sorting and result reading were never attempted.
+
+The launch was incorrectly subject to the same full-screen content check as literal
+typing when no editable region was identified. Revision
+`2026-09-desktop-shortcuts-v5` distinguishes explicitly recognized desktop navigation
+shortcuts from content-dependent keyboard input. Background repainting no longer
+invalidates those shortcuts, while native focus, target geometry, display layout,
+permissions and takeover checks remain required. The existing post-launch wait and
+repeat guard still require evidence of a window transition before another launch.
+The native regression fixture reproduces this refusal with a changing disposable
+window and no identified editable field, without dispatching a global shortcut.
+
+Successful preflight validation is not evidence that the complete Task Manager task
+succeeded. Verify literal `chr`, descending Memory order, and the first row/value
+on Windows 11 after launching the rebuilt EXE.
+
+## Earlier Task Manager reports
 
 The supplied version 1 Task Manager log proves that Ctrl+Shift+Escape was dispatched
 and the next click was refused, but cannot identify which of the three old generic

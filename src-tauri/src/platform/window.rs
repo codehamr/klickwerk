@@ -1,5 +1,6 @@
 use super::Handle;
 use crate::diagnostics::{Handoff, TargetInfo, WindowInfo, input_block};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use windows_sys::Win32::{
     Foundation::*,
     Security::*,
@@ -115,8 +116,64 @@ pub fn inspect(handle: usize, parent: u32) -> TargetInfo {
     }
 }
 
+static HANDOFF_TOPMOST: AtomicUsize = AtomicUsize::new(0);
+static HANDOFF_WAS_FOCUSED: AtomicBool = AtomicBool::new(false);
+
+// Keep the handoff visible even when Windows refuses keyboard activation. Only
+// remove topmost state that this handoff added, when the user leaves the app or starts.
+pub fn raise_for_handoff(handle: usize) {
+    unsafe {
+        let window = handle as HWND;
+        let was_topmost = GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
+        let raised = SetWindowPos(
+            window,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        );
+        if raised != 0 && !was_topmost {
+            HANDOFF_TOPMOST.store(handle, Ordering::SeqCst);
+            HANDOFF_WAS_FOCUSED.store(GetForegroundWindow() == window, Ordering::SeqCst);
+        }
+    }
+}
+
+pub fn handoff_focus_changed(handle: usize, focused: bool) {
+    if HANDOFF_TOPMOST.load(Ordering::SeqCst) != handle {
+        return;
+    }
+    if focused && unsafe { GetForegroundWindow() } as usize == handle {
+        HANDOFF_WAS_FOCUSED.store(true, Ordering::SeqCst);
+    } else if !focused && HANDOFF_WAS_FOCUSED.load(Ordering::SeqCst) {
+        release_handoff_topmost(handle);
+    }
+}
+
+pub fn release_handoff_topmost(handle: usize) {
+    if HANDOFF_TOPMOST
+        .compare_exchange(handle, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        HANDOFF_WAS_FOCUSED.store(false, Ordering::SeqCst);
+        unsafe {
+            SetWindowPos(
+                handle as HWND,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 // Called on the window's UI thread, after the broker has released all input.
-// No synthetic keys or permanent topmost state; every input-queue attachment is detached.
+// Every input-queue attachment is detached; no synthetic keys are needed.
 pub fn handoff(handle: usize) -> Handoff {
     unsafe {
         let window = handle as HWND;
@@ -131,6 +188,7 @@ pub fn handoff(handle: usize) -> Handoff {
             minimized: false,
             focused: false,
             attachment_error: None,
+            topmost_retained: false,
         };
         if super::default_desktop() {
             if IsIconic(window) != 0 {
@@ -161,17 +219,12 @@ pub fn handoff(handle: usize) -> Handoff {
             if attached {
                 report.method = "restore_raise_attach_activate".into();
             }
-            let was_topmost = GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
-            let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE;
-            SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, flags);
+            raise_for_handoff(handle);
             BringWindowToTop(window);
             SetForegroundWindow(window);
             SetActiveWindow(window);
             if GetAncestor(GetFocus(), GA_ROOT) != window {
                 SetFocus(window);
-            }
-            if !was_topmost {
-                SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
             }
             if attached {
                 AttachThreadInput(current_thread, foreground_thread, 0);
@@ -184,6 +237,10 @@ pub fn handoff(handle: usize) -> Handoff {
         report.minimized = IsIconic(window) != 0;
         report.focused =
             report.foreground_after == handle && GetAncestor(GetFocus(), GA_ROOT) == window;
+        if report.focused {
+            handoff_focus_changed(handle, true);
+        }
+        report.topmost_retained = HANDOFF_TOPMOST.load(Ordering::SeqCst) == handle;
         report
     }
 }

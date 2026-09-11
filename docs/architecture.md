@@ -19,17 +19,28 @@ reset both backend session state and the composer. There is no persistent task l
 A second instance of the EXE in `--stop-broker` mode owns all task `SendInput`
 calls, low-level keyboard/mouse hooks, and a hidden native window for display,
 power, and session notifications. No stop bar or global shortcut is created.
-The main interface shows a two-second startup notice before minimizing. Hooks
-already detect takeover during this countdown; release events from the launch
-shortcut are allowed until input is armed. All keys/buttons must be released
-before the first agent action.
+The main interface shows a two-second startup notice before minimizing. Mouse and
+keyboard events during this countdown do not cancel startup. Explicit Stop,
+heartbeat/connection loss and desktop changes still cancel it. Takeover monitoring
+starts after the countdown; all keys/buttons must be released before the first
+agent action. Each continuation and administrator restart gets the same countdown.
 
-Each agent input carries `INPUT_TAG`. Other keyboard events, pointer movement,
-buttons, and scrolling latch termination. Duplicate mouse-position notifications
-are ignored: the OS can echo an injected position without its tag even though the
-pointer has not moved. External injected input also interrupts, allowing software
-keyboards and other accessibility input to take over. User events are passed on;
-queued agent presses and movements are suppressed after the stop latch. Balanced
+Each agent input carries `INPUT_TAG`. Non-injected keyboard events, buttons, and
+scrolling latch termination immediately after the countdown. Pointer movement has a 100
+physical-pixel tolerance, measured as distance from a fixed anchor. Small successive
+movements accumulate relative to that anchor; jitter does not reset it. Agent
+movement and countdown input update the anchor, so an untagged cursor echo or small
+movement after a click does not cause a false stop. The browser preview uses the
+same radius in CSS pixels. Windows-marked injected keyboard events are passed on
+without claiming user takeover, even when they lack the agent tag. Focusing an
+editable control can coincide with software-generated input, and the injected flag
+does not identify the originating process. This filter has no timing grace period:
+non-injected keyboard input interrupts immediately even during agent input.
+Software keyboards can still activate the explicit Stop control, and mouse input
+keeps its existing takeover behavior. See
+[KBDLLHOOKSTRUCT flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct).
+User events are passed on; queued agent presses and movements are suppressed after
+the stop latch. Balanced
 release events are still allowed. Hooks are pumped before each small input batch,
 including individual Unicode scalars during long typing.
 
@@ -80,6 +91,15 @@ ignored. Win32 EDIT controls are identified directly; windowless WinUI fields us
 read-only UI Automation on the capture worker with bounded provider timeouts. If
 identification fails, validation falls back to the full-screen check. UIA text
 values and passwords are not read. See Microsoft's [UIA transaction timeout](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation2-put_transactiontimeout).
+
+Desktop navigation shortcuts use an explicit allowlist: Ctrl+Shift+Escape,
+Alt+Tab (with optional Shift), the Windows key, and Win+D/E/R. Their behavior does
+not depend on text or animated content in the current app, so revalidation checks
+native target identity, focus, bounds and display layout without requiring unchanged
+pixels. App-specific shortcuts, unknown combinations and literal text retain content
+validation. Target permissions, physical takeover, broker leases and post-launch
+verification still apply to every desktop shortcut. A repaint alone never proves
+that a window transition succeeded.
 
 Pixel changes are evaluated in local tiles, including within a known field;
 tiny caret changes are tolerated. Capture and waits run within the broker's
@@ -202,6 +222,16 @@ Metadata includes physical/image geometry, model latency, validation/input timin
 window/process identity, focused editable regions, integrity levels, sampling traces
 and repeat-guard outcomes. Frame IDs are independent of step IDs. The terminal
 window is inspected and a final capture attempted before restoring klickwerk.
+Each actual input interruption records its Windows event type, flags, monotonic
+time, elapsed time since tagged agent input and optional pointer/anchor positions
+on the attempt. Keyboard codes and typed content are not collected.
+Handoff restores/shows the window, raises it temporarily above other windows and
+attempts keyboard activation up to three times. Temporary topmost state remains
+until the user leaves the app or starts another run, including when Windows denies
+activation; `handoff.topmost_retained` reports it. This preserves visibility over
+other topmost applications. Secure desktops remain outside this mechanism. See
+[SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+and [SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
 Sampling traces are condensed only in model context, not in the export. Failed model requests retain their
 observation and a no-input system step. See [session export](session-export.md).
 

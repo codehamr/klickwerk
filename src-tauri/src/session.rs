@@ -59,6 +59,8 @@ pub struct Attempt {
     settings: ExecutionSettings,
     handoff: Option<crate::diagnostics::Handoff>,
     terminal_desktop: Option<crate::diagnostics::TerminalDesktop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interruption: Option<crate::diagnostics::InputInterruption>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -163,6 +165,7 @@ impl RunView {
             settings: settings.into(),
             handoff: None,
             terminal_desktop: None,
+            interruption: None,
         });
     }
 
@@ -175,6 +178,12 @@ impl RunView {
     pub fn record_terminal_desktop(&mut self, desktop: crate::diagnostics::TerminalDesktop) {
         if let Some(attempt) = self.attempts.last_mut() {
             attempt.terminal_desktop = Some(desktop);
+        }
+    }
+
+    pub fn record_interruption(&mut self, interruption: crate::diagnostics::InputInterruption) {
+        if let Some(attempt) = self.attempts.last_mut() {
+            attempt.interruption = Some(interruption);
         }
     }
 
@@ -440,6 +449,14 @@ mod tests {
                 parse_error: None,
             });
         }
+        run.record_interruption(crate::diagnostics::InputInterruption {
+            event: 512,
+            flags: 1,
+            detected_ms: 5000,
+            since_agent_input_ms: Some(31),
+            position: Some([2343, 196]),
+            anchor: Some([2242, 196]),
+        });
         run.record_terminal_desktop(crate::diagnostics::TerminalDesktop {
             frame_id: None,
             capture_error: Some("Fixture capture unavailable.".into()),
@@ -465,6 +482,22 @@ mod tests {
             serde_json::to_value(SessionExport::new(run, 1, None, String::new(), None).unwrap())
                 .unwrap();
         assert_eq!(json["evidence"]["model_responses_observed"], 15);
+        let interruption = &json["run"]["attempts"][0]["interruption"];
+        assert_eq!(interruption["event"], 512);
+        assert_eq!(interruption["since_agent_input_ms"], 31);
+        assert_eq!(interruption["anchor"], serde_json::json!([2242, 196]));
+        let restored: RunView = serde_json::from_value(json["run"].clone()).unwrap();
+        assert!(restored.attempts[0].interruption.is_some());
+        let mut legacy = json["run"].clone();
+        legacy["attempts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("interruption");
+        assert!(
+            serde_json::from_value::<RunView>(legacy).unwrap().attempts[0]
+                .interruption
+                .is_none()
+        );
         assert_eq!(json["evidence"]["model_responses_omitted"], 3);
         assert_eq!(json["evidence"]["model_responses"][0]["frame_id"], 4);
         assert_eq!(

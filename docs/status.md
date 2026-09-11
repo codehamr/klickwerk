@@ -1,6 +1,92 @@
-# Validation status — 2026-09-10
+# Validation status — 2026-09-11
 
-## Current restart transport follow-up
+## Current injected keyboard follow-up
+
+Revision `2026-09-injected-keyboard-v7` fixes the newly identified takeover trigger:
+an untagged `WM_KEYDOWN` with `LLKHF_INJECTED` arrived in the same millisecond as
+the agent's search-field click. The earlier controller treated every untagged key
+as user input. Windows-marked injected keyboard events now pass through without
+claiming takeover, regardless of their tag or timing. Physical keys still stop
+control immediately after countdown, including while agent input is running.
+The two-second countdown, 100-pixel mouse tolerance and foreground handoff remain
+in effect. See the [export diagnosis](session-export.md#injected-keyboard-regression).
+
+The new native regression fails with the old controller and passes with the fix.
+It exercises real SendInput callbacks after tagged input and an actual broker
+click, followed by successful text entry. Hardware keyboard flags are supplied
+through a test-only message to the same production event handler; this does not
+emulate a physical keyboard driver. The fixture now also sends heartbeats between
+successive screenshot comparisons, avoiding a test-side liveness timeout.
+
+Validation: all 52 portable Rust tests, TypeScript/ESLint and Windows-target Clippy
+with warnings denied pass. Wine/Xvfb passes 22 input-monitor checks, 20 disposable
+editor/handoff checks, 11 shortcut checks and 5 restart transport checks. No UI code
+changed in this follow-up; the preceding 38 Chromium checks remain the UI baseline.
+Actual Windows 11 physical input, software keyboards and live-model Task Manager
+filter/sort/result completion still require target-PC acceptance.
+
+The Windows x64 release is `build/klickwerk-v7.exe`; `build/klickwerk.exe` was also
+updated to the same build. Artifact identity, validation results and the feedback export hash are recorded in
+`build/validation/injected-keyboard-release.json` with adjacent test/build logs.
+
+## Earlier input and foreground follow-up
+
+Revision `2026-09-input-handoff-v6` follows a run that successfully launched Task
+Manager and resumed with administrator permission, then stopped immediately after
+focusing search. The older report lacks the underlying interruption event.
+The controller now ignores mouse/keyboard interruption during the two-second
+countdown and tolerates mouse movement within a 100-pixel radius afterward.
+Larger movement, clicks, scrolling and keyboard input still stop control. Stop and
+connection/desktop guards remain active during startup. English/German UI copy and
+browser preview follow the same behavior. Exports record the actual interruption
+trigger without keyboard codes or typed content.
+
+Terminal handoff now retains temporary topmost state and retries activation,
+including a visible fallback when keyboard focus is denied. Leaving the app or
+starting another run clears the temporary state. See the
+[export diagnosis](session-export.md#input-interruption-and-foreground-follow-up).
+
+Validation: all 50 portable Rust tests, 38 Chromium tests, TypeScript/ESLint and
+Windows-target Clippy with warnings denied pass. Wine/Xvfb passes 21 input-monitor
+checks, 19 disposable editor/handoff checks, 11 shortcut validation checks and 5
+restart transport checks. The native tests cover the 100/101-pixel boundary,
+successive small movements, immediate buttons/wheel/keyboard, countdown grace,
+explicit Stop, interruption metadata, visibility without activation and temporary
+topmost cleanup. Actual Windows 11 UAC, competing application focus behavior and
+live-model Task Manager filter/sort/result completion remain target-PC checks.
+
+The Windows x64 release is `build/klickwerk-update.exe`. Replacing the existing
+`build/klickwerk.exe` returned EACCES, so it was preserved and the completed build
+was copied to this alternate filename. Artifact identity, validation results and the feedback export hash are recorded in
+`build/validation/input-handoff-release.json` with adjacent test/build logs.
+
+## Earlier desktop shortcut follow-up
+
+Revision `2026-09-desktop-shortcuts-v5` fixes the September 11 run rejecting all
+three Ctrl+Shift+Escape proposals before any input was dispatched. Background
+repainting triggered full-screen keyboard content validation because no editable
+field was identified. Explicitly recognized desktop navigation shortcuts now check
+native target identity, focus, geometry and layout independently of pixels. Literal
+text and app-specific shortcuts retain content checks; input permissions, takeover,
+post-launch observation and duplicate prevention still apply.
+
+The new native regression reproduces the original failure with the old controller
+and a repainting disposable window with no identified editable region; it passes
+with the fix. Validation: all 48 portable Rust tests, TypeScript/ESLint,
+Windows-target Clippy with warnings denied, and the Wine/Xvfb native suite pass
+(11 new shortcut checks, 17 disposable editor checks,
+13 input monitoring checks and 5 restart transport checks). The shortcut fixture
+tests production preflight validation without dispatching global shortcuts. Actual
+Windows 11 live-model launch, `chr` filtering, descending Memory sort and top-row
+reporting still require a run on the target PC. See the
+[export diagnosis](session-export.md#desktop-shortcut-validation-regression) and
+[Windows acceptance](windows-acceptance.md#delayed-launch-and-live-filtering-regression).
+
+The rebuilt Windows x64 release is `build/klickwerk.exe`; artifact identity,
+validation results and the feedback export hash are recorded in
+`build/validation/desktop-shortcuts-release.json` with adjacent test/build logs.
+
+## Earlier restart transport follow-up
 
 Revision `2026-09-restart-transport-v4` fixes the accepted restart socket inheriting
 nonblocking mode on Windows. The latest export records two `restart_ack_failed`

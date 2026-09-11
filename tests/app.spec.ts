@@ -18,7 +18,9 @@ async function start(page: Page, task = "Draft a welcome note") {
   await expect(page.getByText("Starting in a moment")).toBeVisible();
 }
 async function takeOver(page: Page) {
+  await expect(page.getByText("Working on your desktop")).toBeVisible();
   await page.mouse.move(15, 15);
+  await page.mouse.move(250, 15);
   await expect(page.getByLabel("Your refinement")).toBeVisible();
 }
 async function saveWorkflow(page: Page, name = "My note") {
@@ -48,7 +50,9 @@ test("first launch and useful suggestions are accessible", async ({ page }) => {
     page.getByRole("button", { name: "Let’s do it" }),
   ).toBeDisabled();
   await expect(
-    page.getByText("Move your mouse or type to take over. Anytime."),
+    page.getByText(
+      "Once running, move the mouse deliberately, click, or type to take over.",
+    ),
   ).toBeVisible();
   await page.getByRole("button", { name: /Make sense of your tabs/ }).click();
   await expect(page.getByLabel("What would you like me to do?")).toHaveValue(
@@ -131,12 +135,20 @@ test("settings autosave edits, trap focus, and return to the prompt", async ({
   );
 });
 
-test("mouse takeover clearly pauses the countdown and allows unchanged continuation", async ({
+test("countdown ignores input and mouse takeover works after startup and continuation", async ({
   page,
 }) => {
   await page.goto("/");
   await connect(page);
   await start(page, "Write Grüße 世界 in an editor");
+  await page.mouse.move(20, 20);
+  await page.mouse.wheel(0, 10);
+  await page.keyboard.press("Shift");
+  await expect(page.getByText("Starting in a moment")).toBeVisible();
+  await expect(
+    page.getByText("Use Stop to cancel startup.").first(),
+  ).toBeVisible();
+  await expect(page.getByLabel("Your refinement")).toBeHidden();
   await takeOver(page);
   await expect(
     page.getByText("You took over. The agent is paused.", { exact: true }),
@@ -149,8 +161,38 @@ test("mouse takeover clearly pauses the countdown and allows unchanged continuat
   ).toBeEnabled();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByText("Starting in a moment")).toBeVisible();
+  await page.mouse.move(20, 20);
+  await page.keyboard.press("Shift");
+  await expect(page.getByText("Starting in a moment")).toBeVisible();
   await takeOver(page);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("explicit Stop still cancels startup during the countdown", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await start(page);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.getByLabel("Your refinement")).toBeVisible();
+  await page.waitForTimeout(2200);
+  await expect(page.getByText("Working on your desktop")).toBeHidden();
+});
+
+test("mouse movement tolerates 100 pixels but slow movement beyond the anchor interrupts", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await connect(page);
+  await start(page);
+  await page.mouse.move(300, 300);
+  await expect(page.getByText("Working on your desktop")).toBeVisible();
+  await page.mouse.move(350, 300);
+  await page.mouse.move(400, 300);
+  await expect(page.getByLabel("Your refinement")).toBeHidden();
+  await page.mouse.move(401, 300);
+  await expect(page.getByLabel("Your refinement")).toBeVisible();
 });
 
 test("keyboard takeover and corrections keep session history available on demand", async ({
@@ -1292,7 +1334,7 @@ test("administrator consent recovery waits for UI readiness and resumes the same
       snapshot.pending_resume_run_id = null;
       snapshot.run.phase = "countdown";
       snapshot.run.message =
-        "Starting in 2 seconds. Move your mouse or press any key to interrupt.";
+        "Starting in 2 seconds. Input interruption begins after the countdown.";
       window.dispatchEvent(
         new CustomEvent("state", { detail: structuredClone(snapshot) }),
       );

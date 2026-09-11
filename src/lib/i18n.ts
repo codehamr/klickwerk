@@ -253,6 +253,10 @@ const de: Record<string, string> = {
     "Bewege die Maus oder drücke eine Taste zum Übernehmen.",
   "Move your mouse or type to take over. Anytime.":
     "Maus bewegen oder tippen zum Übernehmen. Jederzeit.",
+  "Once running, move the mouse deliberately, click, or type to take over.":
+    "Sobald der Agent arbeitet: Maus deutlich bewegen, klicken oder tippen, um zu übernehmen.",
+  "Move the mouse deliberately, click, scroll, or press a key to interrupt.":
+    "Zum Unterbrechen: Maus deutlich bewegen, klicken, scrollen oder eine Taste drücken.",
   "New task": "Neue Aufgabe",
   "No input sent. The target changed.":
     "Keine Eingabe gesendet. Das Ziel hat sich verändert.",
@@ -374,6 +378,9 @@ const de: Record<string, string> = {
     "Die Vorschau-Verbindung sieht gut aus. Es wurde kein Server kontaktiert.",
   "Starting in 2 seconds. Move your mouse or press any key to interrupt.":
     "Start in 2 Sekunden. Maus bewegen oder eine Taste drücken zum Unterbrechen.",
+  "Starting in 2 seconds. Input interruption begins after the countdown.":
+    "Start in 2 Sekunden. Maus und Tastatur unterbrechen erst nach dem Countdown.",
+  "Use Stop to cancel startup.": "Mit Stoppen kannst du den Start abbrechen.",
   "Taking a look at your desktop…": "Ich schaue mir deinen Desktop an…",
   "Choosing the next action…": "Ich wähle den nächsten Schritt…",
   "Waiting for the desktop to settle…":

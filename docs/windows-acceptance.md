@@ -30,12 +30,24 @@ do not establish physical hardware or WebView2 acceptance.
 
 - Start a disposable task. Confirm the short startup notice remains visible for
   two seconds and the main window minimizes before capture. No stop bar appears.
-- Move the physical mouse during countdown, model inference, clicking, dragging,
-  and long typing. Repeat with ordinary keys, buttons, and scrolling. Control must
+- Move the mouse, type, click and scroll during the two-second countdown. Startup
+  must continue; explicit Stop must still cancel. After countdown, test movement
+  within 100 physical pixels, including a cursor echo after agent clicks. It must
+  not interrupt. Move beyond that radius in one motion and in small successive
+  motions; both must interrupt. Repeat after Continue and administrator recovery.
+- Move the physical mouse beyond the tolerance during model inference, clicking,
+  dragging and long typing. Repeat with ordinary keys, buttons, and scrolling,
+  which must interrupt immediately without a movement threshold. Control must
   end without automatic resumption, and held keys/buttons must be released. The
   main window should restore and focus, with an obvious paused state and a focused
   refinement field. Check Continue without a correction and Refine & continue.
 - Verify the agent's own clicks, Unicode text, and shortcuts do not interrupt it.
+- Focus Task Manager search and other native text fields. Software-injected
+  keyboard events must not claim physical takeover, including an injected event
+  with no agent tag immediately after a click. Verify filtering can proceed.
+  Press a physical key during the click and during typing: it must still stop
+  immediately, without a timing grace period. Test explicit Stop from a software
+  keyboard; injected keystrokes alone no longer trigger takeover.
 - Test parent termination, UI hangs, minimized-window heartbeats, WebView failure,
   monitor changes, lock/unlock, and suspend/resume. No late action may arrive after
   termination. Measure physical takeover latency under normal and heavy load.
@@ -47,10 +59,12 @@ npm run test:native -- --with-disposable-input
 ```
 
 It uses a loopback scripted provider and an unsaved fixture-owned editor. It checks
-hidden monitoring, tagged versus external input, countdown cancellation, premature
-input refusal, heartbeat/pipe loss, capture, clicks, multilingual/multiline typing,
-Ctrl+A, and interruption during text. External input is simulated for this fixture;
-physical hardware still needs the manual checks above.
+hidden monitoring, tagged versus external input, countdown grace and explicit
+cancellation, premature input refusal, heartbeat/pipe loss, capture, clicks, multilingual/multiline typing,
+Ctrl+A, and interruption during text. SendInput exercises real injected callbacks.
+Non-injected keyboard events are simulated through a test-only message that calls
+the production keyboard event handler on the broker thread. That message handler
+is absent from normal release builds; physical hardware still needs manual checks.
 
 The fixture also checks the production restart protocol with an accepted socket
 from a nonblocking listener, fragmented authentication, delayed receipt, a large
@@ -126,8 +140,10 @@ unchanged. Its transport simulation does not request UAC or operate the target a
 - Repeat takeover, model questions, success and failure while the main window is
   minimized, behind a normal app and behind a maximized/full-screen app. Check that
   it becomes visible in front and the refinement field accepts typing. Confirm the
-  window does not stay always-on-top after handoff. Inspect the attempt's `handoff`
-  result; record any OS denial instead of treating taskbar flashing as success.
+  window is restored and temporarily stays above other windows, including a topmost
+  target. Leave the app or start another run and confirm temporary topmost state
+  clears. Inspect `handoff.topmost_retained` and actual keyboard focus; test the
+  visible fallback when Windows denies activation instead of just taskbar flashing.
 - Reproduce the Task Manager task: Ctrl+Shift+Escape, filter `chr`, sort Memory
   descending, identify the first matching row and its displayed value. Check the
   foreground metadata, search result, sort indicator and image/desktop mapping.
@@ -167,6 +183,12 @@ unchanged. Its transport simulation does not request UAC or operate the target a
 
 ## Delayed launch and live filtering regression
 
+- Leave a video, live preview or updating terminal visible with Task Manager closed
+  and no identifiable editable field focused. Ctrl+Shift+Escape must be dispatched
+  despite unrelated repainting during model inference; `observation_changed` must
+  not repeatedly block the launch. Repeat with an editable field focused and its
+  contents updating. Foreground/focus/layout changes must still reject stale input,
+  and app-specific shortcuts and text must retain their content checks.
 - Start with Task Manager closed. Use the reported task in German and English,
   including literal `chr`, Memory descending, and the top process/value. Test cold
   starts under load and already-open windows. Confirm only one launch shortcut is

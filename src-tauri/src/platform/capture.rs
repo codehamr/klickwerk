@@ -221,12 +221,26 @@ pub fn input_effect(before: &Capture, after: &Capture, action: &Action) -> bool 
     changed(before, after)
 }
 
-fn keyboard_content_changed(before: &Capture, after: &Capture) -> bool {
-    if before.frame.foreground != after.frame.foreground
+fn keyboard_target_changed(before: &Capture, after: &Capture) -> bool {
+    before.frame.foreground != after.frame.foreground
         || before.focused_control != after.focused_control
         || before.foreground_bounds != after.foreground_bounds
         || before.focused_element != after.focused_element
-    {
+        || (
+            before.frame.left,
+            before.frame.top,
+            before.frame.width,
+            before.frame.height,
+        ) != (
+            after.frame.left,
+            after.frame.top,
+            after.frame.width,
+            after.frame.height,
+        )
+}
+
+fn keyboard_content_changed(before: &Capture, after: &Capture) -> bool {
+    if keyboard_target_changed(before, after) {
         return true;
     }
     if let Some(element) = &before.focused_element {
@@ -264,7 +278,11 @@ pub fn unchanged(capture: &Capture, action: &Action) -> Result<(), String> {
             frame.image_width.max(frame.image_height),
             capture.excluded,
         )?;
-        if keyboard_content_changed(capture, &current) {
+        // Launching or switching windows must not depend on unrelated video,
+        // terminal output or live rows. Keep native target checks for every key.
+        if keyboard_target_changed(capture, &current)
+            || (!action.is_desktop_shortcut() && keyboard_content_changed(capture, &current))
+        {
             return Err(
                 "The screen changed while the model was thinking. Observe again before typing."
                     .into(),

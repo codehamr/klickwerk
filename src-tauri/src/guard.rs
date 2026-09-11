@@ -3,6 +3,43 @@ use serde::{Deserialize, Serialize};
 
 pub const HEARTBEAT_TIMEOUT_MS: u64 = 700;
 pub const LEASE_MS: u64 = 250;
+pub const COUNTDOWN_MS: u64 = 2000;
+pub const MOUSE_TAKEOVER_TOLERANCE_PX: u32 = 100;
+
+pub fn keyboard_can_interrupt(
+    flags: u32,
+    own_input: bool,
+    monitoring: bool,
+    running: bool,
+) -> bool {
+    // KBDLLHOOKSTRUCT: injected = 0x10, lower-integrity injected = 0x02,
+    // key release = 0x80. Software-generated keys do not establish user takeover.
+    monitoring && !own_input && flags & 0x12 == 0 && (running || flags & 0x80 == 0)
+}
+
+#[derive(Clone, Copy)]
+pub struct PointerGuard {
+    pub anchor: (i32, i32),
+}
+impl PointerGuard {
+    pub const fn new(anchor: (i32, i32)) -> Self {
+        Self { anchor }
+    }
+
+    pub fn observe(&mut self, position: (i32, i32), own_input: bool, monitoring: bool) -> bool {
+        if own_input || !monitoring {
+            self.anchor = position;
+            return false;
+        }
+        // Keep the anchor through small movements so slow, deliberate movement
+        // still interrupts. Agent movement and countdown input set a new baseline.
+        let dx = self.anchor.0.abs_diff(position.0);
+        let dy = self.anchor.1.abs_diff(position.1);
+        dx > MOUSE_TAKEOVER_TOLERANCE_PX
+            || dy > MOUSE_TAKEOVER_TOLERANCE_PX
+            || dx * dx + dy * dy > MOUSE_TAKEOVER_TOLERANCE_PX * MOUSE_TAKEOVER_TOLERANCE_PX
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,6 +116,8 @@ pub enum Reply {
     },
     Stopped {
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interruption: Option<crate::diagnostics::InputInterruption>,
     },
     Error {
         message: String,
@@ -162,6 +201,57 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn injected_keyboard_events_never_establish_user_takeover() {
+        // The reported search-field click was followed by an untagged keydown
+        // with flags = 16. Its classification must not depend on a timing grace.
+        for flags in [0x10, 0x12, 0x02, 0x90, 0x92, 0x30] {
+            for own_input in [false, true] {
+                for running in [false, true] {
+                    assert!(!keyboard_can_interrupt(flags, own_input, true, running));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn physical_keyboard_takeover_starts_after_countdown_without_an_input_grace() {
+        for flags in [0, 0x01, 0x20, 0x80, 0x81, 0xa0] {
+            assert!(!keyboard_can_interrupt(flags, false, false, false));
+            assert!(!keyboard_can_interrupt(flags, false, false, true));
+            assert!(!keyboard_can_interrupt(flags, true, true, true));
+            assert!(keyboard_can_interrupt(flags, false, true, true));
+            assert_eq!(
+                keyboard_can_interrupt(flags, false, true, false),
+                flags & 0x80 == 0
+            );
+        }
+    }
+
+    #[test]
+    fn mouse_jitter_is_tolerated_but_slow_movement_accumulates() {
+        let mut pointer = PointerGuard::new((-100, 200));
+        for offset in [1, -2, 3, -4, 0, 25, 50, 100] {
+            assert!(!pointer.observe((-100 + offset, 200), false, true));
+        }
+        assert!(pointer.observe((1, 200), false, true));
+        assert!(pointer.observe((-100, 99), false, true));
+        assert!(pointer.observe((-28, 272), false, true));
+    }
+
+    #[test]
+    fn agent_and_countdown_movements_reset_the_pointer_baseline() {
+        let mut pointer = PointerGuard::new((0, 0));
+        assert!(!pointer.observe((1000, 1000), false, false));
+        assert!(!pointer.observe((1001, 1001), false, true));
+        assert!(!pointer.observe((2242, 196), true, true));
+        assert!(!pointer.observe((2242, 196), false, true));
+        assert!(!pointer.observe((2243, 196), false, true));
+        assert!(pointer.observe((2242, 297), false, true));
+        assert!(!pointer.observe((i32::MIN, 0), true, true));
+        assert!(pointer.observe((i32::MAX, 0), false, true));
+    }
+
     #[test]
     fn stop_is_irreversible_and_queued_actions_cannot_resume() {
         let mut gate = Gate::new(1000);

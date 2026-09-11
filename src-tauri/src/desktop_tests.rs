@@ -72,29 +72,129 @@ fn fixture_key(tag: usize) {
         })
         .collect();
     unsafe {
-        SendInput(
-            events.len() as u32,
-            events.as_ptr(),
-            size_of::<INPUT>() as i32,
+        assert_eq!(
+            SendInput(
+                events.len() as u32,
+                events.as_ptr(),
+                size_of::<INPUT>() as i32
+            ),
+            events.len() as u32
         );
     }
 }
+fn fixture_hardware_key() -> Result<(), String> {
+    // SendInput cannot produce hardware flags. The test-only message invokes the
+    // production keyboard handler on its owning thread without synthesizing a key.
+    let window = monitor();
+    let mut result = 0;
+    if window.is_null()
+        || unsafe {
+            SendMessageTimeoutW(
+                window,
+                platform::broker::FIXTURE_KEYBOARD_EVENT,
+                0,
+                0,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                500,
+                &mut result,
+            )
+        } == 0
+        || result != 1
+    {
+        return Err("The hardware keyboard fixture could not reach the input monitor.".into());
+    }
+    Ok(())
+}
+fn fixture_heartbeat(broker: &BrokerClient) -> Result<(), String> {
+    // Synchronous screenshot comparisons also need liveness between actions.
+    broker
+        .sender
+        .try_send(Command::Heartbeat {
+            sent_ms: platform::now(),
+            lease_sequence: None,
+        })
+        .map_err(|_| "The fixture heartbeat failed.".into())
+}
 fn fixture_mouse(tag: usize) {
+    // Relative movement avoids Wine's cached GetCursorPos in this fixture thread.
+    // Alternate direction so repeated fixture events cannot run into a screen edge.
+    static LEFT: AtomicBool = AtomicBool::new(false);
+    let dx = if LEFT.fetch_xor(true, Ordering::SeqCst) {
+        120
+    } else {
+        -120
+    };
+    fixture_mouse_motion(dx, 0, MOUSEEVENTF_MOVE, tag);
+}
+
+fn fixture_mouse_to(position: (i32, i32), tag: usize) {
+    let (left, top, width, height) = capture::layout();
+    let frame = Frame {
+        id: 1,
+        captured_ms: 0,
+        left,
+        top,
+        width,
+        height,
+        image_width: width,
+        image_height: height,
+        foreground: 0,
+    };
+    let (dx, dy) = frame
+        .absolute(position.0 - left, position.1 - top)
+        .expect("Fixture pointer must be on screen");
+    fixture_mouse_motion(
+        dx,
+        dy,
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        tag,
+    );
+}
+
+fn fixture_mouse_motion(dx: i32, dy: i32, flags: u32, tag: usize) {
     let event = INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
             mi: MOUSEINPUT {
-                dx: 1,
-                dy: 0,
+                dx,
+                dy,
                 mouseData: 0,
-                dwFlags: MOUSEEVENTF_MOVE,
+                dwFlags: flags,
                 time: 0,
                 dwExtraInfo: tag,
             },
         },
     };
     unsafe {
-        SendInput(1, &event, size_of::<INPUT>() as i32);
+        assert_eq!(SendInput(1, &event, size_of::<INPUT>() as i32), 1);
+    }
+}
+
+fn fixture_mouse_button_or_wheel(wheel: bool) {
+    let flags = if wheel {
+        vec![MOUSEEVENTF_WHEEL]
+    } else {
+        vec![MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP]
+    };
+    let events: Vec<INPUT> = flags
+        .into_iter()
+        .map(|dw_flags| INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dwFlags: dw_flags,
+                    mouseData: if wheel { 120 } else { 0 },
+                    ..unsafe { std::mem::zeroed() }
+                },
+            },
+        })
+        .collect();
+    unsafe {
+        SendInput(
+            events.len() as u32,
+            events.as_ptr(),
+            size_of::<INPUT>() as i32,
+        );
     }
 }
 async fn suite() -> Result<(), String> {
@@ -123,7 +223,7 @@ async fn suite() -> Result<(), String> {
         let mut broker = BrokerClient::spawn(true)?;
         armed(&mut broker).await?;
         check(
-            matches!(next(&mut broker, false, 2000).await?, Reply::Stopped { reason } if reason.contains("heartbeat")),
+            matches!(next(&mut broker, false, 2000).await?, Reply::Stopped { reason, .. } if reason.contains("heartbeat")),
             "heartbeat loss stops an armed broker",
         )?;
     }
@@ -131,9 +231,28 @@ async fn suite() -> Result<(), String> {
         let mut broker = BrokerClient::spawn(true)?;
         ready(&mut broker).await?;
         fixture_mouse(0);
+        fixture_hardware_key()?;
         check(
-            matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason } if reason.contains("mouse or keyboard")),
-            "mouse takeover cancels the countdown",
+            matches!(next(&mut broker, true, 4000).await?, Reply::Armed),
+            "mouse and keyboard input during countdown do not cancel startup",
+        )?;
+        fixture_hardware_key()?;
+        check(
+            matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason, .. } if reason.contains("mouse or keyboard")),
+            "keyboard takeover starts after the countdown",
+        )?;
+    }
+    {
+        let mut broker = BrokerClient::spawn(true)?;
+        ready(&mut broker).await?;
+        fixture_mouse(0);
+        broker
+            .sender
+            .try_send(Command::Stop)
+            .map_err(|_| "Cannot cancel startup.")?;
+        check(
+            matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { .. }),
+            "explicit Stop still cancels the countdown",
         )?;
     }
     {
@@ -171,7 +290,7 @@ async fn suite() -> Result<(), String> {
         drop(receiver);
         broker.sender = unused;
         check(
-            matches!(next(&mut broker, false, 1500).await?, Reply::Stopped { reason } if reason.contains("connection")),
+            matches!(next(&mut broker, false, 1500).await?, Reply::Stopped { reason, .. } if reason.contains("connection")),
             "controller pipe loss stops input",
         )?;
     }
@@ -199,13 +318,45 @@ async fn suite() -> Result<(), String> {
                 let mut broker = BrokerClient::spawn(true)?;
                 armed(&mut broker).await?;
                 check(GetForegroundWindow() == window, "the input monitor leaves the target app focused")?;
-                if mouse { fixture_mouse(platform::input::INPUT_TAG); } else { fixture_key(platform::input::INPUT_TAG); }
-                check(next(&mut broker, true, 150).await.is_err(), "tagged agent input does not interrupt itself")?;
+                if mouse { fixture_mouse(platform::input::INPUT_TAG); } else {
+                    fixture_key(0);
+                    check(next(&mut broker, true, 150).await.is_err(), "software keyboard input is tolerated without recent agent input")?;
+                    fixture_key(platform::input::INPUT_TAG);
+                    fixture_key(0);
+                }
+                check(next(&mut broker, true, 150).await.is_err(),
+                    if mouse { "tagged agent input does not interrupt itself" } else { "untagged software keyboard events after agent input do not claim user takeover" })?;
                 let started = Instant::now();
-                if mouse { fixture_mouse(0); } else { fixture_key(0); }
-                check(matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason } if reason.contains("mouse or keyboard")),
-                    if mouse { "external mouse movement stops the broker" } else { "external keyboard input stops the broker" })?;
+                if mouse { fixture_mouse(0); } else {
+                    fixture_key(platform::input::INPUT_TAG);
+                    fixture_hardware_key()?;
+                }
+                check(matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { reason, interruption: Some(event) }
+                    if reason.contains("mouse or keyboard") && (mouse || (event.event == WM_KEYDOWN && event.flags == 0 && event.since_agent_input_ms.is_some()))),
+                    if mouse { "external mouse movement stops the broker" } else { "hardware keyboard flags stop immediately after agent input and record the trigger" })?;
                 println!("Takeover fixture latency: {} ms", started.elapsed().as_millis());
+            }
+            {
+                let mut broker = BrokerClient::spawn(true)?;
+                armed(&mut broker).await?;
+                fixture_mouse_to((250, 250), platform::input::INPUT_TAG);
+                for x in [251, 300, 350] {
+                    fixture_mouse_to((x, 250), 0);
+                    check(next(&mut broker, true, 100).await.is_err(), "small mouse movement stays within the 100 pixel tolerance")?;
+                }
+                fixture_mouse_to((351, 250), 0);
+                check(matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { interruption: Some(event), .. }
+                    if event.event == WM_MOUSEMOVE && event.anchor == Some([250, 250]) && event.position == Some([351, 250]) && event.since_agent_input_ms.is_some()),
+                    "slow mouse movement beyond 100 pixels interrupts and records its trigger")?;
+            }
+            for wheel in [false, true] {
+                let mut broker = BrokerClient::spawn(true)?;
+                armed(&mut broker).await?;
+                fixture_mouse_to((250, 250), platform::input::INPUT_TAG);
+                fixture_mouse_button_or_wheel(wheel);
+                check(matches!(next(&mut broker, true, 1500).await?, Reply::Stopped { interruption: Some(event), .. }
+                    if event.event == if wheel { WM_MOUSEWHEEL } else { WM_LBUTTONDOWN }),
+                    "clicks and scrolling interrupt without a movement threshold")?;
             }
             Ok::<(), String>(())
         }.await;
@@ -251,6 +402,14 @@ unsafe extern "system" fn editor_proc(
 ) -> LRESULT {
     unsafe {
         match message {
+            WM_APP => {
+                SetFocus(if wparam == 0 {
+                    window
+                } else {
+                    GetDlgItem(window, 1)
+                });
+                0
+            }
             WM_SIZE => {
                 let edit = GetDlgItem(window, 1);
                 if !edit.is_null() {
@@ -391,6 +550,116 @@ async fn execute_fixture(
     }
 }
 
+fn shortcut_validation_suite(window: HWND) -> Result<(), String> {
+    use crate::action::Modifier;
+    use windows_sys::Win32::Graphics::Gdi::{
+        RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    };
+    let launch = Action::Key {
+        key: "ESC".into(),
+        modifiers: vec![Modifier::Ctrl, Modifier::Shift],
+    };
+    let redraw = || unsafe {
+        RedrawWindow(
+            window,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+    };
+    unsafe {
+        SendMessageW(window, WM_APP, 0, 0);
+    }
+    redraw();
+    let before = capture::capture(1, 1280, [0; 4])?;
+    check(
+        before.focused_control == window as usize && before.focused_element.is_none(),
+        "shortcut regression reproduces an unidentified editable region",
+    )?;
+    unsafe {
+        SetWindowTextW(
+            GetDlgItem(window, 2),
+            platform::wide("Process values: 999 MB, refreshed during inference").as_ptr(),
+        );
+    }
+    redraw();
+    let after = capture::capture(2, 1280, [0; 4])?;
+    check(
+        capture::changed(&before, &after),
+        "shortcut regression reproduces changing screen content",
+    )?;
+    check(
+        capture::unchanged(&before, &launch).is_ok(),
+        "Task Manager launch accepts repainting with unchanged native focus",
+    )?;
+    check(
+        !capture::input_effect(&before, &after, &launch),
+        "repainting alone does not confirm Task Manager launched",
+    )?;
+    for action in [
+        Action::Text { text: "chr".into() },
+        Action::Key {
+            key: "F".into(),
+            modifiers: vec![Modifier::Ctrl],
+        },
+        Action::Key {
+            key: "F4".into(),
+            modifiers: vec![Modifier::Alt],
+        },
+    ] {
+        check(
+            capture::unchanged(&before, &action).is_err(),
+            "content-dependent keyboard input still rejects a changed observation",
+        )?;
+    }
+    unsafe {
+        SendMessageW(window, WM_APP, 1, 0);
+    }
+    check(
+        capture::unchanged(&before, &launch).is_err(),
+        "desktop shortcuts reject a changed keyboard target",
+    )?;
+    redraw();
+    let mut field = capture::capture(3, 1280, [0; 4])?;
+    unsafe {
+        SetWindowTextW(
+            GetDlgItem(window, 1),
+            platform::wide("Changed field during inference").as_ptr(),
+        );
+    }
+    redraw();
+    check(
+        capture::unchanged(&field, &launch).is_ok(),
+        "desktop shortcuts do not depend on focused text contents",
+    )?;
+    check(
+        capture::unchanged(
+            &field,
+            &Action::Key {
+                key: "A".into(),
+                modifiers: vec![Modifier::Ctrl],
+            },
+        )
+        .is_err(),
+        "select-all still rejects changed field contents",
+    )?;
+    field.frame.left -= 1;
+    check(
+        capture::unchanged(&field, &launch).is_err(),
+        "desktop shortcuts reject changed monitor layouts",
+    )?;
+    unsafe {
+        SetWindowTextW(GetDlgItem(window, 1), platform::wide("").as_ptr());
+        SetWindowTextW(
+            GetDlgItem(window, 2),
+            platform::wide("Process values: 100 MB").as_ptr(),
+        );
+    }
+    redraw();
+    println!("Desktop shortcut validation: 11 checks passed. No desktop shortcut was dispatched.");
+    Ok(())
+}
+
 async fn input_suite() -> Result<(), String> {
     use base64::Engine;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -422,13 +691,29 @@ async fn input_suite() -> Result<(), String> {
             SetForegroundWindow(window);
             let report = platform::window::handoff(own as usize);
             if !report.focused { println!("Fixture handoff: {report:?}"); }
-            let no_topmost = GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0;
+            let kept_topmost = GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
             let own_block = platform::window::inspect(own as usize, std::process::id()).input_block;
+            platform::window::release_handoff_topmost(own as usize);
+            let no_topmost = GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0;
+            ShowWindow(own, SW_HIDE);
+            SetForegroundWindow(window);
+            platform::window::raise_for_handoff(own as usize);
+            platform::window::raise_for_handoff(own as usize);
+            platform::window::handoff_focus_changed(own as usize, false);
+            check(IsWindowVisible(own) != 0 && GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0,
+                "handoff keeps the app visibly above other windows even without keyboard activation")?;
+            SetForegroundWindow(own);
+            platform::window::handoff_focus_changed(own as usize, true);
+            SetForegroundWindow(window);
+            platform::window::handoff_focus_changed(own as usize, false);
+            check(GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_TOPMOST as isize == 0,
+                "leaving the app or starting again clears temporary topmost state after repeated raises")?;
             DestroyWindow(own);
             check(report.visible && !report.minimized && report.focused && report.foreground_after == own as usize, "handoff restores a minimized window and verifies foreground keyboard focus")?;
-            check(no_topmost && own_block.as_deref() == Some("own_window"), "handoff restores ordinary z-order and agent input still rejects its own window")?;
+            check(kept_topmost && report.topmost_retained && no_topmost && own_block.as_deref() == Some("own_window"), "handoff stays on top until released and agent input still rejects its own window")?;
             SetForegroundWindow(window);
         }
+        shortcut_validation_suite(window)?;
         let mut broker=BrokerClient::spawn(false)?;armed(&mut broker).await?;
         let screen=capture::capture(1,1280,broker.bounds)?;
         let edit=unsafe{GetDlgItem(window,1)};let mut rect:RECT=unsafe{std::mem::zeroed()};unsafe{GetWindowRect(edit,&mut rect);}
@@ -460,6 +745,8 @@ async fn input_suite() -> Result<(), String> {
         check(action.frame_id==1,"fixture provider receives a decodable screenshot and returns a validated action")?;
         capture::unchanged(&screen,&action.action)?;
         execute_fixture(&mut broker,1,screen.frame.clone(),action.action).await?;
+        fixture_key(0);
+        check(next(&mut broker,true,150).await.is_err(), "untagged software keys after a broker click leave control running")?;
         check(unsafe{GetForegroundWindow()}==window,"broker click focuses the disposable editor")?;
         let before_typing=capture::capture(2,1280,broker.bounds)?;
         let mut frame=screen.frame.clone();frame.foreground=window as usize;
@@ -469,11 +756,13 @@ async fn input_suite() -> Result<(), String> {
         check(read()=="Grüße 世界 🪷","real input preserves Unicode, including surrogate pairs")?;
         check(capture::unchanged(&before_typing,&Action::Text{text:"duplicate".into()}).is_err(),"text input rejects content changed during model inference")?;
         let current=capture::capture(3,1280,broker.bounds)?;
+        fixture_heartbeat(&broker)?;
         check(capture::unchanged(&current,&Action::Text{text:"next".into()}).is_ok(),"text input accepts an unchanged screen and focused field")?;
         check(current.focused_element.as_ref().is_some_and(|field| field.source == "win32_edit" && field.process_id == editor.id()), "capture identifies the actual editable region")?;
         unsafe { SetWindowTextW(GetDlgItem(window, 2), platform::wide("Process values: 999 MB, refreshed while typing").as_ptr()); }
         tokio::time::sleep(Duration::from_millis(60)).await;
         let live = capture::capture(4,1280,broker.bounds)?;
+        fixture_heartbeat(&broker)?;
         let global_changed = capture::changed(&current, &live);
         let field_changed = capture::input_effect(&current, &live, &Action::Text { text: "chr".into() });
         if !global_changed || field_changed {
@@ -481,6 +770,7 @@ async fn input_suite() -> Result<(), String> {
         }
         check(global_changed && !field_changed, "unrelated repainting is not proof that text arrived")?;
         check(capture::unchanged(&current, &Action::Text { text: "chr".into() }).is_ok(), "an unchanged focused field accepts input while the rest of the app updates")?;
+        fixture_heartbeat(&broker)?;
         unsafe { MoveWindow(edit, 0, 0, 450, 250, 1); }
         check(capture::unchanged(&current, &Action::Text { text: "chr".into() }).is_err(), "moving or resizing the editable target invalidates the observation")?;
         unsafe { MoveWindow(edit, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 1); }
@@ -492,11 +782,11 @@ async fn input_suite() -> Result<(), String> {
         frame.captured_ms=platform::now();
         broker.sender.try_send(Command::Execute{sequence:5,sent_ms:platform::now(),frame,action:Action::Text{text:"x".repeat(3000)}}).map_err(|_|"Cannot begin bounded typing fixture.")?;
         tokio::time::sleep(Duration::from_millis(5)).await;
-        fixture_key(0);
-        check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{..}),"external keyboard input interrupts a long typing action")?;
+        fixture_hardware_key()?;
+        check(matches!(next(&mut broker,false,1500).await?,Reply::Stopped{interruption:Some(event),..} if event.flags == 0),"hardware keyboard flags interrupt a long typing action")?;
         let after=read();tokio::time::sleep(Duration::from_millis(150)).await;
         check(after==read()&&after.len()<3018,"no further text arrives after takeover")?;
-        println!("Disposable input fixture: 17 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
+        println!("Disposable input fixture: 20 checks passed. Only a fixture server and an unsaved test editor were used.");Ok::<(),String>(())
     }.await;
     let _ = editor.kill();
     let _ = editor.wait();

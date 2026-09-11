@@ -924,6 +924,21 @@ impl BrokerClient {
             created: Instant::now(),
         })
     }
+    fn stopped(
+        app: &tauri::AppHandle,
+        reason: String,
+        interruption: Option<crate::diagnostics::InputInterruption>,
+    ) -> End {
+        if let Some(interruption) = interruption {
+            app.state::<AppState>()
+                .view
+                .lock()
+                .unwrap()
+                .record_interruption(interruption);
+        }
+        End::Stopped(reason)
+    }
+
     fn send(&self, command: Command) -> Result<(), End> {
         self.sender
             .try_send(command)
@@ -972,7 +987,7 @@ impl BrokerClient {
                     else if cancel.load(Ordering::SeqCst) || waiting_since.elapsed()>Duration::from_secs(5) {return Err(End::Stopped("The input monitor startup was cancelled or timed out.".into()));}
                 },
                 reply=self.receiver.recv()=>return match reply{
-                    Some(Reply::Stopped{reason})=>Err(End::Stopped(reason)),Some(Reply::Error{message})=>Err(End::Failed(message)),Some(value)=>{if matches!(value,Reply::Ready{..}){self.ready=true;}Ok(value)},None=>Err(End::Stopped("The input monitor process exited. Input has been released.".into()))
+                    Some(Reply::Stopped{reason, interruption})=>Err(Self::stopped(app, reason, interruption)),Some(Reply::Error{message})=>Err(End::Failed(message)),Some(value)=>{if matches!(value,Reply::Ready{..}){self.ready=true;}Ok(value)},None=>Err(End::Stopped("The input monitor process exited. Input has been released.".into()))
                 }
             }
         }
@@ -989,7 +1004,7 @@ impl BrokerClient {
             tokio::select! {
                 result=&mut future=>{self.heartbeat(app,cancel,None)?;return result.map_err(End::Failed);},
                 _=timer.tick()=>self.heartbeat(app,cancel,None)?,
-                reply=self.receiver.recv()=>return Err(match reply{Some(Reply::Stopped{reason})=>End::Stopped(reason),Some(Reply::Error{message})=>End::Failed(message),_=>End::Stopped("The input monitor connection ended.".into())})
+                reply=self.receiver.recv()=>return Err(match reply{Some(Reply::Stopped{reason, interruption})=>Self::stopped(app, reason, interruption),Some(Reply::Error{message})=>End::Failed(message),_=>End::Stopped("The input monitor connection ended.".into())})
             }
         }
     }
@@ -1056,6 +1071,18 @@ fn action_diagnostics(
 }
 
 async fn handoff(app: &tauri::AppHandle) -> crate::diagnostics::Handoff {
+    let mut report = handoff_once(app).await;
+    for _ in 0..2 {
+        if report.focused || report.method == "unavailable_input_desktop" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        report = handoff_once(app).await;
+    }
+    report
+}
+
+async fn handoff_once(app: &tauri::AppHandle) -> crate::diagnostics::Handoff {
     let (sender, receiver) = oneshot::channel();
     let handle = app.clone();
     let scheduled = app.run_on_main_thread(move || {
@@ -1082,6 +1109,7 @@ async fn handoff(app: &tauri::AppHandle) -> crate::diagnostics::Handoff {
         minimized: false,
         focused: false,
         attachment_error: None,
+        topmost_retained: false,
     }
 }
 
@@ -1217,12 +1245,14 @@ async fn controller(
             Reply::Ready { bounds } => { broker.bounds = bounds; terminal_excluded = bounds; },
             _ => return Err(End::Failed("The input monitor did not become ready.".into())),
         }
-        progress(&app, "countdown", "Starting in 2 seconds. Move your mouse or press any key to interrupt.", started);
+        progress(&app, "countdown", "Starting in 2 seconds. Input interruption begins after the countdown.", started);
         match broker.signal(&app, &cancel, None).await? {
             Reply::Armed => (),
             _ => return Err(End::Failed("The input monitor could not start.".into())),
         }
+        progress(&app, "running", "Taking a look at your desktop…", started);
         if let Some(window) = app.get_webview_window("main") {
+            if let Ok(hwnd) = window.hwnd() { platform::window::release_handoff_topmost(hwnd.0 as usize); }
             window.minimize().map_err(|_| End::Failed("The main window could not be minimized.".into()))?;
         }
         broker.during(&app, &cancel, async { tokio::time::sleep(Duration::from_millis(180)).await; Ok(()) }).await?;
@@ -1620,6 +1650,17 @@ pub fn run() {
             stop_dictation
         ])
         .on_window_event(|window, event| {
+            if let Ok(hwnd) = window.hwnd() {
+                match event {
+                    tauri::WindowEvent::Focused(focused) => {
+                        platform::window::handoff_focus_changed(hwnd.0 as usize, *focused)
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        platform::window::release_handoff_topmost(hwnd.0 as usize)
+                    }
+                    _ => (),
+                }
+            }
             if matches!(
                 event,
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed

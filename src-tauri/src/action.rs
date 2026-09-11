@@ -108,19 +108,34 @@ impl Action {
         }
     }
 
-    pub fn expects_window_transition(&self) -> bool {
-        match self {
-            Self::Key { key, modifiers } => {
-                (key_code(key) == Some(0x1b)
-                    && modifiers.len() == 2
-                    && modifiers.contains(&Modifier::Ctrl)
-                    && modifiers.contains(&Modifier::Shift))
-                    || (key.eq_ignore_ascii_case("TAB") && modifiers.contains(&Modifier::Alt))
-                    || key_code(key) == Some(0x5b)
-                    || modifiers.contains(&Modifier::Win)
-            }
+    // Only these desktop navigation shortcuts are independent of app content.
+    // A window transition alone is not enough: other Win chords can target an app.
+    pub fn is_desktop_shortcut(&self) -> bool {
+        let Self::Key { key, modifiers } = self else {
+            return false;
+        };
+        let exactly = |expected: &[Modifier]| {
+            modifiers.len() == expected.len() && expected.iter().all(|m| modifiers.contains(m))
+        };
+        match key_code(key) {
+            Some(0x1b) => exactly(&[Modifier::Ctrl, Modifier::Shift]),
+            Some(0x09) => exactly(&[Modifier::Alt]) || exactly(&[Modifier::Alt, Modifier::Shift]),
+            Some(0x5b) => modifiers.is_empty(),
+            Some(0x44 | 0x45 | 0x52) => exactly(&[Modifier::Win]),
             _ => false,
         }
+    }
+
+    pub fn expects_window_transition(&self) -> bool {
+        self.is_desktop_shortcut()
+            || match self {
+                Self::Key { key, modifiers } => {
+                    (key.eq_ignore_ascii_case("TAB") && modifiers.contains(&Modifier::Alt))
+                        || key_code(key) == Some(0x5b)
+                        || modifiers.contains(&Modifier::Win)
+                }
+                _ => false,
+            }
     }
 
     pub fn is_input(&self) -> bool {
@@ -212,6 +227,58 @@ pub fn key_code(key: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_shortcuts_ignore_key_aliases_and_modifier_order() {
+        for (key, modifiers) in [
+            ("ESC", vec![Modifier::Ctrl, Modifier::Shift]),
+            ("escape", vec![Modifier::Shift, Modifier::Ctrl]),
+            ("tab", vec![Modifier::Alt]),
+            ("TAB", vec![Modifier::Shift, Modifier::Alt]),
+            ("WIN", vec![]),
+            ("super", vec![]),
+            ("Meta", vec![]),
+            ("d", vec![Modifier::Win]),
+            ("E", vec![Modifier::Win]),
+            ("r", vec![Modifier::Win]),
+        ] {
+            let action = Action::Key {
+                key: key.into(),
+                modifiers,
+            };
+            assert!(action.is_desktop_shortcut(), "{action:?}");
+            assert!(action.expects_window_transition(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn content_independent_shortcuts_require_an_exact_allowlist_match() {
+        for (key, modifiers) in [
+            ("ESC", vec![]),
+            ("ESC", vec![Modifier::Ctrl]),
+            ("ESC", vec![Modifier::Ctrl, Modifier::Shift, Modifier::Alt]),
+            ("ESC", vec![Modifier::Ctrl, Modifier::Ctrl]),
+            ("TAB", vec![Modifier::Ctrl]),
+            ("TAB", vec![Modifier::Alt, Modifier::Ctrl]),
+            ("WIN", vec![Modifier::Ctrl]),
+            ("R", vec![Modifier::Ctrl]),
+            ("E", vec![Modifier::Win, Modifier::Shift]),
+            ("F4", vec![Modifier::Alt]),
+            ("F", vec![Modifier::Ctrl]),
+            ("A", vec![Modifier::Ctrl]),
+            ("ENTER", vec![]),
+            ("DELETE", vec![]),
+            ("Q", vec![Modifier::Win]),
+        ] {
+            let action = Action::Key {
+                key: key.into(),
+                modifiers,
+            };
+            assert!(!action.is_desktop_shortcut(), "{action:?}");
+        }
+        assert!(!Action::Text { text: "chr".into() }.is_desktop_shortcut());
+        assert!(!Action::Observe.is_desktop_shortcut());
+    }
+
     #[test]
     fn strict_actions_reject_ambiguous_and_outdated_output() {
         let valid = r#"{"frame_id":1,"description":"Open editor","action":{"type":"click","x":10,"y":20,"button":"left"}}"#;

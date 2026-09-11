@@ -114,6 +114,14 @@ export interface Run {
   recovery_events?: RecoveryEvent[];
 }
 export interface Attempt {
+  interruption?: {
+    event: number;
+    flags: number;
+    detected_ms: number;
+    since_agent_input_ms: number | null;
+    position: [number, number] | null;
+    anchor: [number, number] | null;
+  };
   number: number;
   started_at: number;
   finished_at: number | null;
