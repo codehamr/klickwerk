@@ -169,6 +169,12 @@ fn ui_heartbeat(state: tauri::State<AppState>) {
     state.ui_at.store(platform::now(), Ordering::SeqCst);
 }
 
+fn update_owns_activity(active: &Option<Arc<AtomicBool>>, cancel: &Arc<AtomicBool>) -> bool {
+    active
+        .as_ref()
+        .is_some_and(|owner| Arc::ptr_eq(owner, cancel))
+}
+
 #[tauri::command]
 fn skip_update(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
     // This lock also protects the final file replacement: skip can never race a restart.
@@ -179,10 +185,7 @@ fn skip_update(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(
     }
     if let Some(cancel) = state.update_cancel.lock().unwrap().as_ref() {
         cancel.store(true, Ordering::SeqCst);
-        if active
-            .as_ref()
-            .is_some_and(|owner| Arc::ptr_eq(owner, cancel))
-        {
+        if update_owns_activity(&active, cancel) {
             *active = None;
         }
     }
@@ -241,10 +244,7 @@ fn begin_update(app: &tauri::AppHandle, install: bool, updated: bool) -> Result<
             status.message = Some(error);
         }
         status.startup = false;
-        if active
-            .as_ref()
-            .is_some_and(|owner| Arc::ptr_eq(owner, &cancel))
-        {
+        if update_owns_activity(&active, &cancel) {
             *active = None;
         }
         state.update_cancel.lock().unwrap().take();
@@ -302,11 +302,7 @@ async fn perform_update(
     .await?;
     // A skipped update immediately releases the composer. Never restart after that point.
     let active = state.active.lock().unwrap();
-    if cancel.load(Ordering::SeqCst)
-        || !active
-            .as_ref()
-            .is_some_and(|owner| Arc::ptr_eq(owner, cancel))
-    {
+    if cancel.load(Ordering::SeqCst) || !update_owns_activity(&active, cancel) {
         return Err(update::CANCELLED.into());
     }
     state.update.lock().unwrap().phase = "installing";

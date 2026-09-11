@@ -14,6 +14,8 @@ pub const MANIFEST_URL: &str =
 pub const MAX_SIZE: u64 = 64 * 1024 * 1024;
 pub const CANCELLED: &str = "Update skipped.";
 const MANIFEST_LIMIT: usize = 16 * 1024;
+const STAGING_PREFIX: &str = ".klickwerk-update-";
+const BACKUP_NAME: &str = "previous.exe";
 const INVALID: &str = "The update could not be verified. Try again on the next start.";
 pub const CHECK_FAILED: &str =
     "Updates could not be checked. You can keep working and try again later.";
@@ -239,7 +241,7 @@ async fn download_from(
 ) -> Result<Staged, String> {
     cancelled(cancel)?;
     let directory = tempfile::Builder::new()
-        .prefix(".klickwerk-update-")
+        .prefix(STAGING_PREFIX)
         .tempdir_in(current.parent().ok_or(INSTALL_FAILED)?)
         .map_err(|_| INSTALL_FAILED)?;
     let executable = directory.path().join("next.exe");
@@ -313,7 +315,7 @@ pub fn install(
     staged: Staged,
     launch: impl FnOnce(&Path, &str) -> Result<(), String>,
 ) -> Result<(), String> {
-    let backup = staged.directory.path().join("previous.exe");
+    let backup = staged.directory.path().join(BACKUP_NAME);
     fs::rename(current, &backup).map_err(|_| INSTALL_FAILED)?;
     let result = fs::rename(&staged.executable, current)
         .map_err(|_| INSTALL_FAILED.to_string())
@@ -336,7 +338,7 @@ pub fn install(
 }
 
 pub fn cleanup(current: &Path, token: &str) {
-    if !token.starts_with(".klickwerk-update-")
+    if !token.starts_with(STAGING_PREFIX)
         || token.len() > 80
         || !token
             .bytes()
@@ -351,7 +353,7 @@ pub fn cleanup(current: &Path, token: &str) {
     if fs::symlink_metadata(&directory)
         .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
     {
-        let _ = fs::remove_file(directory.join("previous.exe"));
+        let _ = fs::remove_file(directory.join(BACKUP_NAME));
         let _ = fs::remove_dir(directory);
     }
 }

@@ -12,6 +12,26 @@ import type { UpdateStatus } from "../lib/types";
 import { errorText } from "../lib/utils";
 import { Button } from "./ui/button";
 
+type UpdateMessages = Partial<Record<UpdateStatus["phase"], string>>;
+const checkingLabel = "Checking for updates…";
+const currentLabel = "Up to date";
+const startupHeadings: UpdateMessages = {
+  installing: "Restarting with your update…",
+  downloading: "Downloading the latest version…",
+};
+const checkLabels: UpdateMessages = {
+  checking: checkingLabel,
+  current: currentLabel,
+  updated: currentLabel,
+  available: "Update on next start",
+  skipped: "Update skipped",
+};
+const notices: UpdateMessages = {
+  available:
+    "An update is available. It will install the next time you open klickwerk.",
+  updated: "klickwerk is updated. You’re ready to go.",
+};
+
 export function UpdateScreen({ update }: { update: UpdateStatus }) {
   const { t } = useI18n();
   const [error, setError] = useState("");
@@ -29,15 +49,7 @@ export function UpdateScreen({ update }: { update: UpdateStatus }) {
       <div className="update-card">
         <div className="update-heading" role="status">
           <LoaderCircle className="spin" size={18} />
-          <strong>
-            {t(
-              installing
-                ? "Restarting with your update…"
-                : downloading
-                  ? "Downloading the latest version…"
-                  : "Checking for updates…",
-            )}
-          </strong>
+          <strong>{t(startupHeadings[update.phase] ?? checkingLabel)}</strong>
         </div>
         {downloading && (
           <>
@@ -81,13 +93,7 @@ export function UpdateNotice({ update }: { update?: UpdateStatus }) {
   const { t } = useI18n();
   if (!update || update.startup) return null;
   const message =
-    update.phase === "available"
-      ? "An update is available. It will install the next time you open klickwerk."
-      : update.phase === "updated"
-        ? "klickwerk is updated. You’re ready to go."
-        : update.phase === "error"
-          ? update.message
-          : null;
+    update.phase === "error" ? update.message : notices[update.phase];
   if (!message) return null;
   return (
     <div className="update-notice" role="status">
@@ -106,15 +112,7 @@ export function UpdateCheck({ update }: { update?: UpdateStatus }) {
   const [error, setError] = useState("");
   if (!update) return null;
   const checking = update.phase === "checking";
-  const label = checking
-    ? "Checking for updates…"
-    : update.phase === "current" || update.phase === "updated"
-      ? "Up to date"
-      : update.phase === "available"
-        ? "Update on next start"
-        : update.phase === "skipped"
-          ? "Update skipped"
-          : "Check for updates";
+  const label = checkLabels[update.phase] ?? "Check for updates";
   return (
     <span className="update-check">
       <button
