@@ -123,7 +123,7 @@ format marker, version, name and reusable prompt. IDs come from filenames. Legac
 `workflows.json` versions 1 and 2 migrate once into this folder; the original is
 preserved. The old file is no longer read once the folder exists.
 Explicit JSON exports are separate files and include recent observation and pre-handoff screenshots
-(up to 12 frames, bounded to 8 MiB of image data), window details, timing, recovery
+(up to 48 frames, bounded to 8 MiB of base64 image data), window details, timing, recovery
 decisions and bounded assistant responses.
 Explicit demonstration evidence is also included in history exports when present.
 Screenshots otherwise remain temporary in RAM; audio is not saved.
@@ -139,7 +139,13 @@ against the same focused field, using Win32/UI Automation field identity and bou
 when available, otherwise the full screen. A repeated click, key or text action with
 no observed effect is suppressed for one further observation of up to five seconds.
 Only a repeated failure after that recovery asks the user to intervene. All waiting
-remains interruptible, and visible completion still needs model verification.
+remains interruptible. A finish proposal is deferred for a fresh screenshot and a
+separate model review of the requested result. The review can continue checking or
+repairing the task; any later finish proposal needs another review. These decisions
+count toward the configured step limit and remain interruptible. Content-creation
+guidance covers deliberate zoom changes, complete drawings, final saving and file
+type verification. See the [Paint feedback analysis](docs/paint-feedback.md) for
+the evidence, changes and remaining validation limits.
 
 ## Develop
 
@@ -207,6 +213,7 @@ been run by this local session.
 | `src/components/ui/` | Editable UI primitives |
 | `src-tauri/src/config.rs` | Executable-relative configuration and atomic persistence |
 | `src-tauri/src/provider.rs` | Bounded, cancellable compatible model transport |
+| `src-tauri/src/controller.rs` | Task guidance and fresh completion review gate |
 | `src-tauri/src/action.rs` | Strict model action schema |
 | `src-tauri/src/guard.rs` | Portable stop, lease, replay, and coordinate rules |
 | `src-tauri/src/desktop.rs` | Tauri commands and task lifecycle |

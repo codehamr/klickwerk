@@ -509,6 +509,8 @@ const de: Record<string, string> = {
   "Use Stop to cancel startup.": "Mit Stoppen kannst du den Start abbrechen.",
   "Taking a look at your desktop…": "Ich schaue mir deinen Desktop an…",
   "Choosing the next action…": "Ich wähle den nächsten Schritt…",
+  "Checking the result against your request with a fresh screenshot…":
+    "Ich prüfe mit einer neuen Bildschirmaufnahme, ob das Ergebnis deiner Aufgabe entspricht…",
   "Waiting for the desktop to settle…":
     "Ich warte, bis der Desktop bereit ist…",
   "The repeated input was not sent. Waiting for the app, then checking a fresh screenshot.":

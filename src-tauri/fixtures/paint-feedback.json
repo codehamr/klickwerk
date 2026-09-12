@@ -1,0 +1,562 @@
+{
+  "source": "Sanitized action sequence from the September 12, 2026 feedback run; descriptions are model claims, not visual verification. No screenshots, window titles, credentials or private paths are included.",
+  "steps": [
+    {
+      "id": 1,
+      "actor": "agent",
+      "action": {
+        "type": "key",
+        "key": "WIN",
+        "modifiers": []
+      },
+      "status": "completed",
+      "elapsed_ms": 5446,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Open Windows search to launch Paint."
+    },
+    {
+      "id": 2,
+      "actor": "agent",
+      "action": {
+        "type": "text",
+        "text": "Paint"
+      },
+      "status": "completed",
+      "elapsed_ms": 7851,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Enter Paint in the focused search field."
+    },
+    {
+      "id": 3,
+      "actor": "agent",
+      "action": {
+        "type": "click",
+        "x": 190,
+        "y": 307,
+        "button": "left"
+      },
+      "status": "completed",
+      "elapsed_ms": 10766,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          762,
+          1230
+        ]
+      ],
+      "description": "Open the visible Paint result."
+    },
+    {
+      "id": 4,
+      "actor": "agent",
+      "action": {
+        "type": "click",
+        "x": 948,
+        "y": 519,
+        "button": "left"
+      },
+      "status": "completed",
+      "elapsed_ms": 16300,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          3794,
+          2078
+        ]
+      ],
+      "description": "Enlarge the view of the small canvas."
+    },
+    {
+      "id": 5,
+      "actor": "agent",
+      "action": {
+        "type": "click",
+        "x": 918,
+        "y": 519,
+        "button": "left"
+      },
+      "status": "completed",
+      "elapsed_ms": 20594,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          3674,
+          2078
+        ]
+      ],
+      "description": "Enlarge the view using the zoom slider plus control."
+    },
+    {
+      "id": 6,
+      "actor": "agent",
+      "action": {
+        "type": "click",
+        "x": 263,
+        "y": 27,
+        "button": "left"
+      },
+      "status": "completed",
+      "elapsed_ms": 27646,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1054,
+          110
+        ]
+      ],
+      "description": "Select red as the drawing color."
+    },
+    {
+      "id": 7,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 480,
+        "y": 220,
+        "x2": 460,
+        "y2": 245,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 31722,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1922,
+          882
+        ],
+        [
+          1842,
+          982
+        ]
+      ],
+      "description": "Begin the rocket outline."
+    },
+    {
+      "id": 8,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 480,
+        "y": 220,
+        "x2": 460,
+        "y2": 270,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 35396,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1922,
+          882
+        ],
+        [
+          1842,
+          1082
+        ]
+      ],
+      "description": "Add the body and fins."
+    },
+    {
+      "id": 9,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 480,
+        "y": 220,
+        "x2": 450,
+        "y2": 260,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 39048,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1922,
+          882
+        ],
+        [
+          1802,
+          1042
+        ]
+      ],
+      "description": "Add several lines for the body and fins."
+    },
+    {
+      "id": 10,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 480,
+        "y": 220,
+        "x2": 500,
+        "y2": 270,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 42439,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1922,
+          882
+        ],
+        [
+          2002,
+          1082
+        ]
+      ],
+      "description": "Continue the body and fins."
+    },
+    {
+      "id": 11,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 450,
+        "y": 270,
+        "x2": 450,
+        "y2": 315,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 46257,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1802,
+          1082
+        ],
+        [
+          1802,
+          1262
+        ]
+      ],
+      "description": "Complete the body with two side lines."
+    },
+    {
+      "id": 12,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 450,
+        "y": 270,
+        "x2": 460,
+        "y2": 320,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 49591,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1802,
+          1082
+        ],
+        [
+          1842,
+          1282
+        ]
+      ],
+      "description": "Add the body and lower fins."
+    },
+    {
+      "id": 13,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 500,
+        "y": 270,
+        "x2": 500,
+        "y2": 320,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 53627,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          2002,
+          1082
+        ],
+        [
+          2002,
+          1282
+        ]
+      ],
+      "description": "Complete the right side of the body."
+    },
+    {
+      "id": 14,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 450,
+        "y": 320,
+        "x2": 500,
+        "y2": 320,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 57326,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1802,
+          1282
+        ],
+        [
+          2002,
+          1282
+        ]
+      ],
+      "description": "Add the bottom of the body."
+    },
+    {
+      "id": 15,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 450,
+        "y": 290,
+        "x2": 430,
+        "y2": 310,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 61201,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1802,
+          1162
+        ],
+        [
+          1722,
+          1242
+        ]
+      ],
+      "description": "Add the missing fins and flame."
+    },
+    {
+      "id": 16,
+      "actor": "agent",
+      "action": {
+        "type": "key",
+        "key": "S",
+        "modifiers": [
+          "ctrl",
+          "shift"
+        ]
+      },
+      "status": "completed",
+      "elapsed_ms": 64267,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Save the still incomplete drawing as aaa.bmp on the Desktop."
+    },
+    {
+      "id": 17,
+      "actor": "agent",
+      "action": {
+        "type": "text",
+        "text": "aaa.bmp"
+      },
+      "status": "completed",
+      "elapsed_ms": 67840,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Enter aaa.bmp in the focused filename field."
+    },
+    {
+      "id": 18,
+      "actor": "agent",
+      "action": {
+        "type": "click",
+        "x": 707,
+        "y": 436,
+        "button": "left"
+      },
+      "status": "completed",
+      "elapsed_ms": 70408,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          2830,
+          1746
+        ]
+      ],
+      "description": "Confirm saving to the Desktop."
+    },
+    {
+      "id": 19,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 500,
+        "y": 290,
+        "x2": 525,
+        "y2": 310,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 74569,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          2002,
+          1162
+        ],
+        [
+          2102,
+          1242
+        ]
+      ],
+      "description": "Add the right fin after saving."
+    },
+    {
+      "id": 20,
+      "actor": "agent",
+      "action": {
+        "type": "drag",
+        "x": 480,
+        "y": 321,
+        "x2": 480,
+        "y2": 355,
+        "duration_ms": 300
+      },
+      "status": "completed",
+      "elapsed_ms": 77901,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [
+        [
+          1922,
+          1286
+        ],
+        [
+          1922,
+          1422
+        ]
+      ],
+      "description": "Add the flame below the body."
+    },
+    {
+      "id": 21,
+      "actor": "agent",
+      "action": {
+        "type": "key",
+        "key": "S",
+        "modifiers": [
+          "ctrl"
+        ]
+      },
+      "status": "completed",
+      "elapsed_ms": 80804,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Save the last added details."
+    },
+    {
+      "id": 22,
+      "actor": "agent",
+      "action": {
+        "type": "key",
+        "key": "D",
+        "modifiers": [
+          "win"
+        ]
+      },
+      "status": "completed",
+      "elapsed_ms": 84945,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Show the Desktop after saving."
+    },
+    {
+      "id": 23,
+      "actor": "agent",
+      "action": {
+        "type": "finish",
+        "summary": "Created and saved aaa.bmp with a rocket on the Desktop."
+      },
+      "status": "completed",
+      "elapsed_ms": 88915,
+      "image_size": [
+        960,
+        540
+      ],
+      "desktop_points": [],
+      "description": "Claim that aaa.bmp with a rocket was created on the Desktop."
+    }
+  ]
+}

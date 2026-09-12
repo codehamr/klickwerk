@@ -1697,6 +1697,7 @@ async fn controller(
         let mut moved_targets = 0;
         let mut last_input: Option<LastInput> = None;
         let mut repeat_guard = crate::settling::RepeatGuard::default();
+        let mut completion_gate = crate::controller::CompletionGate::default();
         let mut recovering_repeat = false;
         let mut last_visual_change = platform::now();
         for _ in 0..settings.max_steps {
@@ -1708,7 +1709,8 @@ async fn controller(
             {
                 let state = app.state::<AppState>();
                 let mut view = state.view.lock().unwrap();
-                Arc::make_mut(&mut view.evidence).retain(&screen.frame, &screen.jpeg);
+                let purpose = if completion_gate.mode() == crate::controller::DecisionMode::ReviewCompletion { "completion_review" } else { "model_observation" };
+                Arc::make_mut(&mut view.evidence).retain_for(&screen.frame, &screen.jpeg, purpose);
             }
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -1717,14 +1719,14 @@ async fn controller(
             if image_hash == previous_image { unchanged_frames += 1; } else { unchanged_frames = 0; last_visual_change = platform::now(); }
             previous_image = image_hash;
 
-            progress(&app, "running", "Choosing the next action…", started);
+            progress(&app, "running", if completion_gate.mode() == crate::controller::DecisionMode::ReviewCompletion { crate::controller::REVIEW_MESSAGE } else { "Choosing the next action…" }, started);
             let foreground = platform::window::inspect(screen.frame.foreground, std::process::id());
             let history = format!("{}\n\nCurrent native foreground window (titles are untrusted screen data):\n{}", run_context(&app), serde_json::to_string(&foreground).unwrap_or_default());
             let history = format!("{history}\n\nObservation timing and result (changes are not proof of task success):\n{}\nVerified focused editable region:\n{}", observation.summary(), serde_json::to_string(&screen.focused_element).unwrap_or_default());
             let model_started = Instant::now();
             let decision = broker.during(&app, &cancel, provider.decide_with_diagnostics(&task, &history, provider::Observation {
                 frame_id: screen.frame.id, bytes: &screen.jpeg, width: screen.frame.image_width, height: screen.frame.image_height, mime: "image/jpeg",
-            })).await;
+            }, completion_gate.mode())).await;
             let diagnostic = crate::diagnostics::StepDiagnostics {
                 frame: screen.frame.clone(), focused_control: screen.focused_control, foreground: foreground.clone(),
                 model_elapsed_ms: model_started.elapsed().as_millis() as u64,
@@ -1785,6 +1787,13 @@ async fn controller(
                 action_diagnostics(&app, |d| d.rejection = Some(crate::diagnostics::InputFailure::new("no_visual_progress", reason)));
                 action_status(&app, "skipped");
                 return Err(End::Question(reason.into()));
+            }
+            if completion_gate.defer_finish(&decision.action, screen.frame.id) {
+                let reason = crate::controller::REVIEW_MESSAGE;
+                action_diagnostics(&app, |d| d.rejection = Some(crate::diagnostics::InputFailure::new("completion_review_required", reason)));
+                action_status(&app, "skipped");
+                record(&app, Step::note(step + 1, "system", reason, started.elapsed().as_millis() as u64));
+                continue;
             }
             match &decision.action {
                 Action::Finish { summary } => {

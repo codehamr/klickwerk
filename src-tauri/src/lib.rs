@@ -1,5 +1,6 @@
 pub mod action;
 pub mod config;
+pub mod controller;
 pub mod diagnostics;
 pub mod guard;
 pub mod provider;

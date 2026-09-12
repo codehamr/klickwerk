@@ -228,7 +228,7 @@ pub struct ScreenEvidence {
     pub jpeg_base64: String,
 }
 impl Evidence {
-    pub const MAX_FRAMES: usize = 12;
+    pub const MAX_FRAMES: usize = 48;
     pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
     pub fn retain_model(&mut self, response: crate::diagnostics::ModelResponse) {
@@ -332,8 +332,8 @@ impl SessionExport {
             unsent_refinement: refinement.filter(|text| !text.trim().is_empty()),
             coverage: Coverage {
                 history: "all_recorded_steps_and_attempts",
-                screenshots: "recent_frames_bounded_12_and_8_mib_base64",
-                raw_model_responses: "recent_assistant_text_bounded_12_and_32_kib_each",
+                screenshots: "recent_frames_bounded_48_and_8_mib_base64",
+                raw_model_responses: "recent_assistant_text_bounded_48_and_32_kib_each",
                 controller_revision: crate::provider::CONTROLLER_REVISION,
                 capture_backend: "gdi_bitblt_physical_virtual_desktop",
                 clock: "captured_ms_and_input_completed_ms_are_monotonic_other_timestamps_are_unix_ms",
@@ -435,12 +435,13 @@ mod tests {
             phase: "stopped".into(),
             ..RunView::default()
         };
-        for id in 1..=15 {
+        let observed = Evidence::MAX_FRAMES + 3;
+        for id in 1..=observed as u64 {
             let mut next = frame.clone();
             next.id = id;
             Arc::make_mut(&mut run.evidence).retain(&next, b"fixture-jpeg");
         }
-        assert_eq!(run.evidence.frames.len(), 12);
+        assert_eq!(run.evidence.frames.len(), Evidence::MAX_FRAMES);
         assert_eq!(run.evidence.frames_omitted, 3);
         assert_eq!(run.evidence.frames[0].frame.id, 4);
         let snapshot = serde_json::to_value(&run).unwrap();
@@ -448,8 +449,11 @@ mod tests {
         let export = SessionExport::new(run.clone(), 1, None, String::new(), None).unwrap();
         let json = serde_json::to_value(export).unwrap();
         assert_eq!(json["schema_version"], 3);
-        assert_eq!(json["evidence"]["frames_observed"], 15);
-        assert_eq!(json["evidence"]["frames"][11]["frame"]["id"], 15);
+        assert_eq!(json["evidence"]["frames_observed"], observed);
+        assert_eq!(
+            json["evidence"]["frames"][Evidence::MAX_FRAMES - 1]["frame"]["id"],
+            observed
+        );
         assert!(
             json["evidence"]["frames"][0]["jpeg_base64"]
                 .as_str()
@@ -471,7 +475,8 @@ mod tests {
             ..RunView::default()
         };
         run.begin_attempt(&Settings::default(), 1, None, "");
-        for frame_id in 1..=15 {
+        let observed = Evidence::MAX_FRAMES + 3;
+        for frame_id in 1..=observed as u64 {
             Arc::make_mut(&mut run.evidence).retain_model(crate::diagnostics::ModelResponse {
                 frame_id,
                 received_at: 1000,
@@ -514,7 +519,7 @@ mod tests {
         let json =
             serde_json::to_value(SessionExport::new(run, 1, None, String::new(), None).unwrap())
                 .unwrap();
-        assert_eq!(json["evidence"]["model_responses_observed"], 15);
+        assert_eq!(json["evidence"]["model_responses_observed"], observed);
         let interruption = &json["run"]["attempts"][0]["interruption"];
         assert_eq!(interruption["event"], 512);
         assert_eq!(interruption["since_agent_input_ms"], 31);

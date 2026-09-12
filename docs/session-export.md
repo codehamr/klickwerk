@@ -45,28 +45,40 @@ questions and successes remain in their attempt records after refinement.
 
 `completed` means that input was sent, not that its visible outcome was verified.
 Interrupted input can be partial. Suppressed duplicate actions remain `skipped`.
+An initial finish proposal also remains `skipped`, with rejection code
+`completion_review_required`. The following `completion_review` screenshot is a
+fresh observation for checking the result; its model response can finish, request
+help, or continue with a check or repair. This review uses the configured model
+and step budget and does not independently prove that a saved file is correct.
 Wall-clock timestamps use Unix milliseconds; step elapsed times are cumulative
 active-session durations, including previous attempts and excluding paused time.
 
 Reports include user-authored task/action text and the selected server address.
 Connection credentials are excluded by an explicit configuration field list.
 Screenshots, window titles and entered text can themselves contain personal or
-sensitive content. Recent decision screenshots stay in RAM, up to 12 frames and
+sensitive content. Recent decision screenshots stay in RAM, up to 48 frames and
 8 MiB of base64 image data across the whole session, and become persistent only
 when exported. Oldest frames are evicted; oversized images are omitted. The counters
 make these gaps explicit. Frame IDs are unique capture IDs, independent of step IDs.
 Sampling traces record intermediate frame IDs/times, foreground handles, focus,
 changes and observed input effects; their JPEGs are not retained. Retained images
-are labeled `model_observation` or `before_handoff`. A failed/interrupted model
+are labeled `model_observation`, `completion_review` or `before_handoff`. A failed/interrupted model
 request records a system step with its observation. Terminal capture is attempted
 with a two-second timeout after input release and before restoring klickwerk;
 its failure is explicit. These images are not a video or proof of task success. Screenshots are excluded from progress snapshots,
-workflow files and ordinary text-only consolidation. Explicit demonstration screenshots are stored separately and sent when consolidating that demonstration. The latest 12 assistant message texts are retained, each limited to 32 KiB at UTF-8
+workflow files and ordinary text-only consolidation. Explicit demonstration screenshots are stored separately and sent when consolidating that demonstration. The latest 48 assistant message texts are retained, each limited to 32 KiB at UTF-8
 boundaries, with explicit truncation and eviction counts. Parsing failures retain
 the malformed text as well. The configured API key is redacted from retained
 response text/metadata. No audio, raw HTTP exchanges or private model reasoning
 are retained. The app does not upload reports; share the JSON file explicitly when
 using it to diagnose or improve the application.
+
+Revision `2026-09-artifact-review-v9` increases the frame/response count from 12 to
+48 while keeping the 8 MiB screenshot byte budget. Short runs can retain their
+setup, view changes and final result together. Earlier schema-3 reports remain
+readable; their `coverage` strings describe the old limits. Model context now uses
+compact action records, app identity and relevant observation/rejection results;
+full physical geometry, target lists and timing remain in the export.
 
 Windows uses the [Common Item Dialog](https://learn.microsoft.com/en-us/windows/win32/shell/common-file-dialog)
 with JSON filtering, normal overwrite confirmation, and cancellation detection.

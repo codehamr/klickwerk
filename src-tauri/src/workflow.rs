@@ -97,15 +97,30 @@ pub fn context(memory: &str, steps: &[Step]) -> String {
     let mut tail = Vec::new();
     let mut bytes = 0;
     for step in steps.iter().rev() {
-        let mut value = serde_json::to_value(step).unwrap_or_default();
-        // Detailed sampling traces stay in the export, without crowding useful
-        // actions and corrections out of the model's bounded history.
-        if let Some(observation) = step
-            .diagnostics
-            .as_ref()
-            .and_then(|d| d.observation.as_ref())
-        {
-            value["diagnostics"]["observation"] = observation.summary();
+        // Keep actions and their outcomes in context. Repeated physical geometry,
+        // input timings and target lists otherwise evict the start of short tasks.
+        // The complete native diagnostics remain unchanged in the exported steps.
+        let mut value = serde_json::json!({
+            "id": step.id, "actor": step.actor, "description": step.description,
+            "action": step.action, "status": step.status, "image_size": step.image_size,
+        });
+        if let Some(diagnostic) = &step.diagnostics {
+            value["diagnostics"] = serde_json::json!({
+                "frame_id": diagnostic.frame.id,
+                "foreground": {
+                    "executable": diagnostic.foreground.window.executable,
+                    "title": diagnostic.foreground.window.title,
+                    "input_block": diagnostic.foreground.input_block,
+                },
+                "rejection": diagnostic.rejection,
+                "focus_inspection_error": diagnostic.focus_inspection_error,
+                "observation": diagnostic.observation.as_ref().map(|o| serde_json::json!({
+                    "reason": o.reason, "completion": o.completion,
+                    "previous_input_step_id": o.previous_input_step_id,
+                    "input_effect_observed": o.samples.last().map(|s| s.input_effect_observed),
+                })),
+                "repeat_check": diagnostic.repeat_check,
+            });
         }
         let encoded = value.to_string();
         if bytes + encoded.len() > 24000 {
@@ -116,7 +131,7 @@ pub fn context(memory: &str, steps: &[Step]) -> String {
     }
     tail.reverse();
     format!(
-        "Workflow memory (adapt to the current desktop):\n{memory}\n\nUser corrections, in order; the newest correction takes priority:\n{}\n\nAction history (completed means input was sent, not that its outcome was verified; interrupted actions may be partial):\n{}",
+        "Workflow memory (adapt to the current desktop):\n{memory}\n\nUser corrections, in order; the newest correction takes priority:\n{}\n\nAction history (completed means input was sent, not that its outcome was verified; descriptions are model claims, not verified facts; interrupted actions may be partial):\n{}",
         serde_json::to_string(&corrections).unwrap_or_default(),
         tail.join("\n")
     )
@@ -673,6 +688,69 @@ mod tests {
         assert!(context.contains("Keep the source file"));
         assert!(context.contains("\"id\":499"));
         assert!(!context.contains("\"id\":2,"));
+    }
+
+    #[test]
+    fn paint_feedback_keeps_setup_drawing_and_both_saves_in_context() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/paint-feedback.json")).unwrap();
+        let mut steps: Vec<Step> = serde_json::from_value(fixture["steps"].clone()).unwrap();
+        // Representative native metadata used to crowd this 23-action run out
+        // of the bounded history. Keep it in the export, not every model turn.
+        for step in &mut steps {
+            let target = serde_json::json!({
+                "window": {
+                    "handle": 123, "process_id": 456, "title": "Untitled - Paint",
+                    "class_name": "ApplicationFrameWindow", "executable": "mspaint.exe",
+                    "bounds": [0, 0, 3840, 2160], "integrity_level": 8192,
+                    "elevated": false, "inspection_error": null,
+                },
+                "sender_integrity_level": 8192, "input_block": null,
+            });
+            step.diagnostics = Some(
+                serde_json::from_value(serde_json::json!({
+                    "frame": {
+                        "id": step.id, "captured_ms": 1000, "left": 0, "top": 0,
+                        "width": 3840, "height": 2160, "image_width": 960,
+                        "image_height": 540, "foreground": 123,
+                    },
+                    "focused_control": 123, "foreground": target,
+                    "model_elapsed_ms": 2000, "observation_age_ms": 2100,
+                    "validation_elapsed_ms": 100, "input_elapsed_ms": 300,
+                    "targets": vec![target; 3], "rejection": null,
+                }))
+                .unwrap(),
+            );
+        }
+        let context = context("", &steps);
+        for step in &steps {
+            assert!(
+                context.contains(&step.description),
+                "Missing step {}",
+                step.id
+            );
+        }
+        assert!(context.contains("\"key\":\"S\",\"modifiers\":[\"ctrl\",\"shift\"]"));
+        assert!(context.contains("\"key\":\"S\",\"modifiers\":[\"ctrl\"]"));
+        assert!(!context.contains("desktop_points"));
+        assert!(!context.contains("sender_integrity_level"));
+        assert!(
+            serde_json::to_string(&steps)
+                .unwrap()
+                .contains("sender_integrity_level")
+        );
+
+        steps
+            .last_mut()
+            .unwrap()
+            .diagnostics
+            .as_mut()
+            .unwrap()
+            .rejection = Some(crate::diagnostics::InputFailure::new(
+            "completion_review_required",
+            crate::controller::REVIEW_MESSAGE,
+        ));
+        assert!(super::context("", &steps).contains("completion_review_required"));
     }
     #[test]
     fn workflows_round_trip_with_only_a_consolidated_prompt() {

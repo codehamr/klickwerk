@@ -232,9 +232,12 @@ export interface SessionExport {
   coverage: {
     history: "all_recorded_steps_and_attempts";
     screenshots:
-      "recent_frames_bounded_12_and_8_mib_base64" | "unavailable_in_preview";
+      | "recent_frames_bounded_12_and_8_mib_base64"
+      | "recent_frames_bounded_48_and_8_mib_base64"
+      | "unavailable_in_preview";
     raw_model_responses:
       | "recent_assistant_text_bounded_12_and_32_kib_each"
+      | "recent_assistant_text_bounded_48_and_32_kib_each"
       | "unavailable_in_preview";
     controller_revision: string;
     capture_backend: string;
